@@ -111,9 +111,14 @@ def project_home_run(*, batter_name: str, batter_id: int, team: str,
                + cfg["season_weight"] * hr_pa_season)
 
     league_hr_pa = cfg["league_avg_hr_pa"]
+    # Regress toward league average — small HR samples run hot, and an
+    # unshrunk blend claims edges no model should claim.
+    shrink = cfg.get("shrink_to_league", 0.25)
+    blended = (1.0 - shrink) * blended + shrink * league_hr_pa
+
     pitcher_factor = 1.0
     if pitcher_hr_per_bf is not None and league_hr_pa > 0:
-        pitcher_factor = max(0.6, min(1.6, pitcher_hr_per_bf / league_hr_pa))
+        pitcher_factor = max(0.8, min(1.25, pitcher_hr_per_bf / league_hr_pa))
 
     temp_factor = 1.0
     if temp_f is not None:

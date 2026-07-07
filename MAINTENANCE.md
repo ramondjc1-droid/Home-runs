@@ -12,6 +12,13 @@ refreshing. Newest entries first.
 
 ## Log
 
+### 2026-07-07 — HR model calibration before first live run
+First live-slate dry run showed HR probability edges of +12 to +14 points —
+implausibly large. Tightened the pitcher HR factor clamp from [0.6, 1.6] to
+[0.8, 1.25], added 25% shrinkage of blended HR/PA toward league average
+(`homerun.shrink_to_league`), and raised `homerun.min_edge_prob` 0.03 → 0.04.
+K model untouched. Owner approved going live for the next morning's slate.
+
 ### 2026-07-07 — initial build
 System created from the earnings-edge-analyst architecture. All data flows
 through the official MLB Stats API as the primary source; Baseball Savant

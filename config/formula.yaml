@@ -41,10 +41,11 @@ homerun:
   recent_form_weight: 0.7        # weight on last-30-day HR/PA
   season_weight: 0.3
   league_avg_hr_pa: 0.031        # league average HR per PA; update annually
+  shrink_to_league: 0.25         # regress batter HR/PA toward league average
   expected_pa: 4.1               # PAs for a top-of-order bat
   min_pa_season: 100             # skip small-sample bats
   candidates_per_team: 5         # team HR leaders considered per game
-  min_edge_prob: 0.03            # model P(HR) must beat implied prob by this
+  min_edge_prob: 0.04            # model P(HR) must beat implied prob by this
   min_confidence: 6
   max_picks_per_day: 2
   # temperature/wind effect on carry: multiplier per +10F above 70F, and per
