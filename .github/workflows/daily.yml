@@ -23,6 +23,10 @@ on:
         description: "Force a stage (grade | morning | lines | pregame). Blank = auto-pick by ET time."
         required: false
         default: ""
+      dry_run:
+        description: "true = preview only (nothing saved or sent to Telegram)"
+        required: false
+        default: "false"
 
 concurrency:
   group: mlb-k-analyst-daily
@@ -65,6 +69,7 @@ jobs:
           python scripts/dispatch.py
           --schedule "${{ github.event.schedule }}"
           --stage "${{ github.event.inputs.stage }}"
+          --dry-run "${{ github.event.inputs.dry_run }}"
 
       - name: Save picks database
         if: always()

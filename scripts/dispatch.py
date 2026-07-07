@@ -58,9 +58,12 @@ STAGES_BY_TIME = {
 TOLERANCE_MIN = 90
 
 
-def _run(script: str) -> int:
-    print(f"[dispatch] running {script}")
-    return subprocess.call([sys.executable, str(SRC / script)], cwd=str(SRC))
+def _run(script: str, dry_run: bool = False) -> int:
+    cmd = [sys.executable, str(SRC / script)]
+    if dry_run:
+        cmd.append("--dry-run")
+    print(f"[dispatch] running {script}{' --dry-run' if dry_run else ''}")
+    return subprocess.call(cmd, cwd=str(SRC))
 
 
 def _pick_by_time(now: datetime) -> str | None:
@@ -87,7 +90,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--schedule", default="", help="the cron string that fired")
     ap.add_argument("--stage", default="",
                     help="force a stage (grade|morning|lines|pregame)")
+    ap.add_argument("--dry-run", default="",
+                    help="'true' to pass --dry-run through to the stage script")
     args = ap.parse_args(argv[1:])
+    dry_run = args.dry_run.strip().lower() in ("true", "1", "yes")
 
     forced = bool(args.stage)
     script = resolve_script(args.schedule, args.stage)
@@ -104,8 +110,8 @@ def main(argv: list[str]) -> int:
         print(f"[dispatch] {stage_name} already ran today — skipping (idempotent).")
         return 0
 
-    rc = _run(script)
-    if rc == 0:
+    rc = _run(script, dry_run=dry_run)
+    if rc == 0 and not dry_run:  # a preview must not consume the day's slot
         db.log_run(stage_name)
     return rc
 
