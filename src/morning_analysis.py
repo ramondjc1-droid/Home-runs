@@ -1,0 +1,360 @@
+"""MAIN daily script — 10:00 AM ET.
+
+Fetches today's slate, projects strikeouts for every probable starter,
+compares against book K-prop lines, scores confidence, selects the top picks
+(plus home-run picks), generates Opus narratives, persists everything, and
+posts yesterday's grade report followed by today's pick card to Telegram.
+
+    python src/morning_analysis.py --dry-run   # preview, no DB writes / sends
+    python src/morning_analysis.py             # live
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import date, datetime
+
+import cards
+import db
+import narratives
+from config import formula
+from fetchers import fetch_cached, log_error
+from fetchers import mlb_stats_api as mlb
+from fetchers import odds_api, savant, umpscorecards, weather
+from model import confidence, scoring
+from telegram_bot import send_message
+
+RUN_DEADLINE_HOUR_ET = (10, 15)  # alert if the run finishes past 10:15 ET
+
+
+def _park_info(venue: str) -> dict:
+    parks = formula().get("parks", {})
+    if venue in parks:
+        return parks[venue]
+    # Fuzzy fallback for renamed venues.
+    for name, info in parks.items():
+        if name.lower() in venue.lower() or venue.lower() in name.lower():
+            return info
+    return {"k_factor": 1.0, "hr_factor": 1.0, "dome": False}
+
+
+def _skipped(game: mlb.Game, skips: set[str]) -> bool:
+    labels = {str(game.game_pk), game.home_team.upper(), game.away_team.upper()}
+    for p in (game.home_pitcher, game.away_pitcher):
+        if p:
+            labels.add(p["name"].upper())
+    return bool(labels & skips)
+
+
+def analyze_slate(verbose: bool = True) -> tuple[list, list, list[str]]:
+    """Returns (k_projections, hr_projections, flags)."""
+    f = formula()
+    thr = f["thresholds"]
+    flags: list[str] = []
+    skips = db.skips_for_today()
+    forced = {odds_api.norm_name(n) for n in db.force_adds_for_today()}
+
+    slate, slate_fresh = fetch_cached("slate", lambda: [
+        g.__dict__ for g in mlb.todays_slate()])
+    if not slate:
+        return [], [], ["MLB schedule unreachable"]
+    if not slate_fresh:
+        flags.append("MLB schedule stale — cached slate used")
+    games = [mlb.Game(**g) for g in slate]
+    games = [g for g in games if not _skipped(g, skips)]
+    if verbose:
+        print(f"[scan] {len(games)} games on the slate")
+
+    # Prop lines (one Odds API sweep for the whole slate).
+    k_lines = {}
+    if odds_api.configured():
+        k_lines, lines_fresh = fetch_cached(
+            "k_lines_morning", lambda: odds_api.lines_for_slate(odds_api.K_MARKET))
+        k_lines = k_lines or {}
+        if not lines_fresh and k_lines:
+            flags.append("Odds API stale — cached lines used")
+    else:
+        flags.append("ODDS_API_KEY not set — projections shown without edges")
+
+    # Opponent team K% cache (two lookups per game max).
+    team_k: dict[int, float | None] = {}
+
+    def opp_k(team_id: int) -> float | None:
+        if team_id not in team_k:
+            val, fresh = fetch_cached(f"team_k_{team_id}",
+                                      lambda: mlb.team_k_pct_recent(team_id))
+            if not fresh and val is not None:
+                flags.append("team K% stale for one club")
+            team_k[team_id] = val
+        return team_k[team_id]
+
+    k_projs = []
+    for g in games:
+        park = _park_info(g.venue)
+        ump_name, ump_factor = umpscorecards.game_ump_k_factor(g.game_pk)
+        wx = None
+        if not park.get("dome") and weather.configured() and "lat" in park:
+            wx = weather.game_time_forecast(park["lat"], park["lon"], g.game_date_utc)
+
+        for pitcher, team, opp_team_id, opp_abbr in (
+            (g.home_pitcher, g.home_team, g.away_team_id, g.away_team),
+            (g.away_pitcher, g.away_team, g.home_team_id, g.home_team),
+        ):
+            if not pitcher:
+                continue
+            stale = 0
+            profile, fresh = fetch_cached(
+                f"pitcher_{pitcher['id']}",
+                lambda pid=pitcher["id"]: mlb.pitcher_k_profile(pid))
+            if profile is None:
+                flags.append(f"{pitcher['name']}: no stats — skipped")
+                continue
+            if not fresh:
+                stale += 1
+                flags.append(f"{pitcher['name']}: stats stale — fallback used")
+            if (profile["starts"] < f["formula"]["min_starts_required"]
+                    and odds_api.norm_name(pitcher["name"]) not in forced):
+                continue
+
+            opp_k_pct = opp_k(opp_team_id)
+            proj = scoring.project_strikeouts(
+                pitcher_name=pitcher["name"], pitcher_id=pitcher["id"],
+                team=team, opponent=opp_abbr, game_pk=g.game_pk,
+                k_pct_30d=profile["k_pct_30d"],
+                k_pct_season=profile["k_pct_season"],
+                ip_last5_mean=profile["ip_last5_mean"],
+                starts=profile["starts"],
+                opp_k_pct_l15=opp_k_pct,
+                ump_k_factor=ump_factor, park_k_factor=park.get("k_factor", 1.0),
+            )
+            proj.extras.update({
+                "first_pitch_utc": g.game_date_utc, "venue": g.venue,
+                "dome": bool(park.get("dome")), "ump": ump_name,
+                "hr_per_bf": profile.get("hr_per_bf"),
+                "weather": wx, "profile": profile,
+            })
+            if wx and wx["precip_chance"] >= 50:
+                proj.flags.append(f"{wx['precip_chance']}% rain risk")
+
+            # Attach book line + edge.
+            rec = k_lines.get(odds_api.norm_name(pitcher["name"]))
+            if rec and rec.get("line") is not None:
+                scoring.apply_line(proj, rec["line"])
+                book, price = odds_api.best_price_for(rec, proj.side)
+                proj.extras.update({"best_book": book, "best_price": price})
+
+            # CSW% regression check (Savant enrichment).
+            csw_row, _ = savant.pitcher_csw(pitcher["id"])
+            csw_aligned = savant.csw_supports_k(csw_row)
+
+            confidence.score_k_pick(
+                proj, domed_park=bool(park.get("dome")),
+                ump_confirmed=ump_name is not None,
+                ump_high_k=umpscorecards.is_high_k_ump(ump_factor),
+                injury_flags=False, csw_aligned=csw_aligned,
+                line_move=None, stale_sources=stale,
+            )
+            k_projs.append(proj)
+
+    # Home run module.
+    hr_projs = []
+    hr_cfg = f.get("homerun", {})
+    if hr_cfg.get("enabled", True):
+        hr_lines = {}
+        if odds_api.configured():
+            hr_lines, _ = fetch_cached(
+                "hr_lines_morning",
+                lambda: odds_api.lines_for_slate(odds_api.HR_MARKET))
+            hr_lines = hr_lines or {}
+        for g in games:
+            park = _park_info(g.venue)
+            wx = None
+            if not park.get("dome") and weather.configured() and "lat" in park:
+                wx = weather.game_time_forecast(park["lat"], park["lon"],
+                                                g.game_date_utc)
+            for team_id, team, opp_abbr, opp_pitcher in (
+                (g.home_team_id, g.home_team, g.away_team, g.away_pitcher),
+                (g.away_team_id, g.away_team, g.home_team, g.home_pitcher),
+            ):
+                leaders, _ = fetch_cached(
+                    f"hr_leaders_{team_id}",
+                    lambda tid=team_id: mlb.team_hr_leaders(
+                        tid, limit=hr_cfg.get("candidates_per_team", 5)))
+                pitcher_hr = None
+                if opp_pitcher:
+                    prof, _ = fetch_cached(
+                        f"pitcher_{opp_pitcher['id']}",
+                        lambda pid=opp_pitcher["id"]: mlb.pitcher_k_profile(pid))
+                    pitcher_hr = (prof or {}).get("hr_per_bf")
+                for batter in (leaders or []):
+                    bprof, _ = fetch_cached(
+                        f"batter_{batter['id']}",
+                        lambda bid=batter["id"]: mlb.batter_hr_profile(bid))
+                    if not bprof or bprof["pa_season"] < hr_cfg.get("min_pa_season", 100):
+                        continue
+                    hp = scoring.project_home_run(
+                        batter_name=batter["name"], batter_id=batter["id"],
+                        team=team, opponent=opp_abbr, game_pk=g.game_pk,
+                        hr_pa_30d=bprof["hr_pa_30d"],
+                        hr_pa_season=bprof["hr_pa_season"],
+                        park_hr_factor=park.get("hr_factor", 1.0),
+                        pitcher_hr_per_bf=pitcher_hr,
+                        temp_f=wx["temp_f"] if wx else None,
+                    )
+                    hp.extras["first_pitch_utc"] = g.game_date_utc
+                    rec = hr_lines.get(odds_api.norm_name(batter["name"]))
+                    if rec:
+                        _, price = odds_api.best_price_for(rec, "OVER")
+                        if price:
+                            scoring.apply_hr_price(hp, price)
+                            hp.extras["best_book"] = odds_api.best_price_for(rec, "OVER")[0]
+                    confidence.score_hr_pick(
+                        hp, domed_park=bool(park.get("dome")),
+                        injury_flags=False, pa_season=bprof["pa_season"])
+                    hr_projs.append(hp)
+
+    return k_projs, hr_projs, flags
+
+
+def select_picks(k_projs: list, hr_projs: list) -> tuple[list, list]:
+    f = formula()
+    thr = f["thresholds"]
+    qualified = [p for p in k_projs
+                 if p.edge is not None
+                 and abs(p.edge) >= thr["min_edge"]
+                 and p.confidence >= thr["min_confidence"]]
+    qualified.sort(key=lambda p: (p.confidence, abs(p.edge or 0)), reverse=True)
+    k_picks = qualified[:thr["max_picks_per_day"]]
+
+    hr_cfg = f.get("homerun", {})
+    hr_q = [p for p in hr_projs
+            if p.edge is not None
+            and p.edge >= hr_cfg.get("min_edge_prob", 0.03)
+            and p.confidence >= hr_cfg.get("min_confidence", 6)]
+    hr_q.sort(key=lambda p: (p.confidence, p.edge or 0), reverse=True)
+    # One HR pick per batter (books list dupes across events occasionally).
+    seen, hr_picks = set(), []
+    for p in hr_q:
+        if p.batter_id in seen:
+            continue
+        seen.add(p.batter_id)
+        hr_picks.append(p)
+        if len(hr_picks) >= hr_cfg.get("max_picks_per_day", 2):
+            break
+    return k_picks, hr_picks
+
+
+def _persist_k(p) -> int:
+    pick_id = db.insert_pick({
+        "date": date.today().isoformat(), "pick_type": "K",
+        "pitcher_name": p.pitcher_name, "pitcher_id": p.pitcher_id,
+        "team": p.team, "opponent": p.opponent, "game_pk": p.game_pk,
+        "first_pitch_utc": p.extras.get("first_pitch_utc"),
+        "book_line": p.book_line, "best_book_name": p.extras.get("best_book"),
+        "best_book_price": p.extras.get("best_price"),
+        "my_projection": p.projected_ks, "edge": p.edge,
+        "confidence": p.confidence, "pick_side": p.side,
+        "narrative": p.extras.get("narrative"),
+        "metrics_json": json.dumps({
+            "k_pct_blended": p.k_pct_blended, "opp_factor": p.opp_factor,
+            "ump_factor": p.ump_factor, "park_factor": p.park_factor,
+            "bf_expected": p.bf_expected, "conf_reasons": p.conf_reasons,
+            "ump": p.extras.get("ump"), "venue": p.extras.get("venue"),
+        }, default=str),
+    })
+    if p.book_line is not None:
+        db.record_line(pick_id, p.book_line, p.extras.get("best_price"))
+    return pick_id
+
+
+def _persist_hr(p) -> int:
+    pick_id = db.insert_pick({
+        "date": date.today().isoformat(), "pick_type": "HR",
+        "pitcher_name": p.batter_name, "pitcher_id": p.batter_id,
+        "team": p.team, "opponent": p.opponent, "game_pk": p.game_pk,
+        "first_pitch_utc": p.extras.get("first_pitch_utc"),
+        "book_line": 0.5, "best_book_name": p.extras.get("best_book"),
+        "best_book_price": p.book_price,
+        "my_projection": p.hr_prob, "edge": p.edge,
+        "confidence": p.confidence, "pick_side": "OVER",
+        "narrative": p.extras.get("narrative"),
+        "metrics_json": json.dumps(
+            {"hr_pa_adj": p.hr_pa_adj, "implied": p.implied_prob,
+             "conf_reasons": p.conf_reasons, **p.extras}, default=str),
+    })
+    return pick_id
+
+
+def run(dry_run: bool = False, verbose: bool = True) -> list:
+    db.init_db()
+    started = datetime.now()
+
+    k_projs, hr_projs, flags = analyze_slate(verbose=verbose)
+    if not k_projs and not hr_projs:
+        body = cards.no_slate() if not flags else (
+            "⚠️ <b>Morning analysis failed</b> — " + "; ".join(flags))
+        print(body) if dry_run else send_message(body)
+        return []
+
+    k_picks, hr_picks = select_picks(k_projs, hr_projs)
+    if verbose:
+        print(f"[scan] {len(k_projs)} pitchers projected, "
+              f"{len(k_picks)} K picks + {len(hr_picks)} HR picks qualify")
+
+    # Narratives (Opus, budget-gated) + card blocks.
+    k_blocks, hr_blocks = [], []
+    for i, p in enumerate(k_picks):
+        p.extras["narrative"] = narratives.generate(p)
+        k_blocks.append(cards.k_pick_block(i, p, p.extras["narrative"]))
+        flags.extend(p.flags)
+    for i, p in enumerate(hr_picks):
+        p.extras["narrative"] = narratives.generate(p)
+        hr_blocks.append(cards.hr_pick_block(i, p, p.extras["narrative"]))
+
+    grade = cards.grade_report()
+    card = cards.morning_card(k_blocks, hr_blocks, sorted(set(flags)))
+
+    if dry_run:
+        print("\n" + "=" * 60)
+        if grade:
+            print(grade + "\n")
+        print(card)
+        print("=" * 60)
+        print("\n[dry-run] nothing saved or sent. Re-run without --dry-run to go live.")
+        return k_picks + hr_picks
+
+    ids = [_persist_k(p) for p in k_picks] + [_persist_hr(p) for p in hr_picks]
+    ok = True
+    if grade:
+        ok = send_message(grade)
+    ok = send_message(card) and ok
+    if ok:
+        for pid in ids:
+            db.mark_sent(pid)
+
+    elapsed = (datetime.now() - started).total_seconds()
+    if verbose:
+        print(f"[scan] done in {elapsed:.0f}s — {len(ids)} picks saved.")
+    return k_picks + hr_picks
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="MLB K Analyst — morning analysis")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="preview picks without saving or sending")
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args(argv)
+    try:
+        run(dry_run=args.dry_run, verbose=not args.quiet)
+    except Exception as exc:
+        log_error("morning_analysis", f"fatal: {exc}")
+        if not args.dry_run:
+            send_message(f"🚨 <b>Morning analysis crashed</b>: <code>{exc}</code>\n"
+                         "Check logs/errors.log.")
+        raise
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

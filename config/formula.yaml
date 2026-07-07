@@ -1,0 +1,116 @@
+# MLB K Analyst — tunable scoring formula
+# Adjust via the /tune Telegram command, e.g.:
+#   /tune formula.recent_form_weight 0.65
+#   /tune thresholds.min_edge 0.8
+# Every change is logged to the formula_changes table.
+
+formula:
+  recent_form_weight: 0.7        # weight on last-30-day K%
+  season_weight: 0.3             # weight on season K%
+  bf_per_inning: 4.3             # batters faced per inning average
+  league_avg_k_pct: 0.228        # league average K%; update annually
+  min_starts_required: 3         # skip pitchers with fewer starts this season
+
+thresholds:
+  min_edge: 0.7                  # Ks above/below book line required
+  min_confidence: 6              # confidence score 1-10
+  max_picks_per_day: 4
+  line_move_alert: 0.5           # alert when a pick's line moves this much
+
+confidence_weights:
+  base: 2
+  edge_gte_1_5: 4                # massive edge
+  edge_gte_1_0: 3
+  edge_gte_0_7: 2
+  starts_gte_5: 1                # sufficient sample size
+  domed_park: 1                  # no weather risk
+  ump_confirmed: 1
+  ump_high_k_factor: 1           # top-quartile strikeout ump (factor >= 1.02)
+  no_injury_flags: 1
+  csw_aligns_with_k: 1           # CSW% supports K% (not a regression candidate)
+  line_moved_toward_us: 1        # sharp money agrees
+  line_moved_against_us: -2      # fade signal
+  stale_data_penalty: -1         # applied per data source that fell back to cache
+
+# ---------------------------------------------------------------------------
+# HOME RUN picks (secondary module). Model probability a batter homers vs the
+# book's "to hit a HR" implied probability.
+# ---------------------------------------------------------------------------
+homerun:
+  enabled: true
+  recent_form_weight: 0.7        # weight on last-30-day HR/PA
+  season_weight: 0.3
+  league_avg_hr_pa: 0.031        # league average HR per PA; update annually
+  expected_pa: 4.1               # PAs for a top-of-order bat
+  min_pa_season: 100             # skip small-sample bats
+  candidates_per_team: 5         # team HR leaders considered per game
+  min_edge_prob: 0.03            # model P(HR) must beat implied prob by this
+  min_confidence: 6
+  max_picks_per_day: 2
+  # temperature/wind effect on carry: multiplier per +10F above 70F, and per
+  # 10 mph of wind (sign decided by park orientation is unknowable cheaply, so
+  # wind only *reduces* confidence, never boosts the projection).
+  temp_factor_per_10f: 1.03
+
+# ---------------------------------------------------------------------------
+# Park factors. k_factor / hr_factor are multiplicative (1.0 = neutral).
+# dome: true = roofed or retractable (treated as no weather risk).
+# lat/lon power the WeatherAPI lookup for outdoor parks.
+# Rough public-consensus values, -3%..+3% for K; tune freely.
+# ---------------------------------------------------------------------------
+parks:
+  "Angel Stadium":            {team: LAA, k_factor: 1.00, hr_factor: 0.98, dome: false, lat: 33.80, lon: -117.88}
+  "Daikin Park":              {team: HOU, k_factor: 1.01, hr_factor: 1.05, dome: true,  lat: 29.76, lon: -95.36}
+  "Sutter Health Park":       {team: ATH, k_factor: 0.99, hr_factor: 1.02, dome: false, lat: 38.58, lon: -121.51}
+  "Rate Field":               {team: CWS, k_factor: 1.00, hr_factor: 1.06, dome: false, lat: 41.83, lon: -87.63}
+  "Oriole Park at Camden Yards": {team: BAL, k_factor: 1.00, hr_factor: 1.02, dome: false, lat: 39.28, lon: -76.62}
+  "Fenway Park":              {team: BOS, k_factor: 0.97, hr_factor: 0.97, dome: false, lat: 42.35, lon: -71.10}
+  "Yankee Stadium":           {team: NYY, k_factor: 1.00, hr_factor: 1.10, dome: false, lat: 40.83, lon: -73.93}
+  "George M. Steinbrenner Field": {team: TB, k_factor: 1.00, hr_factor: 1.06, dome: false, lat: 27.98, lon: -82.51}
+  "Tropicana Field":          {team: TB,  k_factor: 1.01, hr_factor: 0.98, dome: true,  lat: 27.77, lon: -82.65}
+  "Rogers Centre":            {team: TOR, k_factor: 1.00, hr_factor: 1.04, dome: true,  lat: 43.64, lon: -79.39}
+  "Progressive Field":        {team: CLE, k_factor: 1.01, hr_factor: 0.99, dome: false, lat: 41.50, lon: -81.69}
+  "Comerica Park":            {team: DET, k_factor: 1.00, hr_factor: 0.94, dome: false, lat: 42.34, lon: -83.05}
+  "Kauffman Stadium":         {team: KC,  k_factor: 0.99, hr_factor: 0.92, dome: false, lat: 39.05, lon: -94.48}
+  "Target Field":             {team: MIN, k_factor: 1.00, hr_factor: 1.00, dome: false, lat: 44.98, lon: -93.28}
+  "Globe Life Field":         {team: TEX, k_factor: 1.01, hr_factor: 1.02, dome: true,  lat: 32.75, lon: -97.08}
+  "T-Mobile Park":            {team: SEA, k_factor: 1.03, hr_factor: 0.93, dome: true,  lat: 47.59, lon: -122.33}
+  "Dodger Stadium":           {team: LAD, k_factor: 1.01, hr_factor: 1.05, dome: false, lat: 34.07, lon: -118.24}
+  "Oracle Park":              {team: SF,  k_factor: 1.03, hr_factor: 0.90, dome: false, lat: 37.78, lon: -122.39}
+  "Petco Park":               {team: SD,  k_factor: 1.02, hr_factor: 0.95, dome: false, lat: 32.71, lon: -117.16}
+  "Chase Field":              {team: AZ,  k_factor: 1.00, hr_factor: 1.03, dome: true,  lat: 33.45, lon: -112.07}
+  "Coors Field":              {team: COL, k_factor: 0.96, hr_factor: 1.10, dome: false, lat: 39.76, lon: -104.99}
+  "Wrigley Field":            {team: CHC, k_factor: 1.00, hr_factor: 1.00, dome: false, lat: 41.95, lon: -87.66}
+  "Great American Ball Park": {team: CIN, k_factor: 0.98, hr_factor: 1.12, dome: false, lat: 39.10, lon: -84.51}
+  "American Family Field":    {team: MIL, k_factor: 1.01, hr_factor: 1.04, dome: true,  lat: 43.03, lon: -87.97}
+  "PNC Park":                 {team: PIT, k_factor: 1.00, hr_factor: 0.94, dome: false, lat: 40.45, lon: -80.01}
+  "Busch Stadium":            {team: STL, k_factor: 1.00, hr_factor: 0.95, dome: false, lat: 38.62, lon: -90.19}
+  "Truist Park":              {team: ATL, k_factor: 1.00, hr_factor: 1.02, dome: false, lat: 33.89, lon: -84.47}
+  "loanDepot park":           {team: MIA, k_factor: 1.02, hr_factor: 0.95, dome: true,  lat: 25.78, lon: -80.22}
+  "Citi Field":               {team: NYM, k_factor: 1.02, hr_factor: 0.98, dome: false, lat: 40.76, lon: -73.85}
+  "Citizens Bank Park":       {team: PHI, k_factor: 1.00, hr_factor: 1.08, dome: false, lat: 39.91, lon: -75.17}
+  "Nationals Park":           {team: WSH, k_factor: 1.00, hr_factor: 1.01, dome: false, lat: 38.87, lon: -77.01}
+
+# ---------------------------------------------------------------------------
+# Umpire K factors. Seed values in the plausible public range; the
+# umpscorecards fetcher overrides these when live data is reachable.
+# Unlisted umpires default to 1.0. ump_high_k_factor bonus fires at >= 1.02.
+# ---------------------------------------------------------------------------
+umpire_k_factors:
+  default: 1.0
+  "Doug Eddings": 1.03
+  "Ron Kulpa": 1.02
+  "Marvin Hudson": 1.02
+  "Chad Fairchild": 1.02
+  "Mark Carlson": 1.01
+  "Dan Iassogna": 1.01
+  "Pat Hoberg": 1.00
+  "Laz Diaz": 0.98
+  "C.B. Bucknor": 0.98
+  "Ed Hickox": 0.97
+  "Manny Gonzalez": 0.98
+
+# Budget / model routing (see src/costs.py)
+budget:
+  monthly_ceiling_usd: 100.0
+  low_balance_alert_usd: 20.0

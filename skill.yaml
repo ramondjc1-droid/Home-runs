@@ -1,0 +1,27 @@
+name: mlb-k-analyst
+version: "1.0.0"
+description: >
+  MLB Daily Strikeout Analyst (+ home run picks). Every day in season it
+  projects strikeout totals for all probable starters, compares them to
+  sportsbook K prop lines, scores confidence, and delivers the top 4
+  highest-edge picks to Telegram at 10 AM ET — plus a home-run pick module.
+  Grades yesterday's picks against official box scores at 2 AM ET.
+entrypoints:
+  morning_analysis: src/morning_analysis.py     # picks + card (supports --dry-run)
+  refresh_lines: src/refresh_lines.py           # 2 PM line movement check
+  pregame_check: src/pregame_check.py           # hourly, ~1h before first pitch
+  grader: src/grader.py                         # 2 AM grading from box scores
+  command_handler: src/command_handler.py       # Telegram slash commands + Q&A
+schedule_et:
+  - "02:00 -> grader"
+  - "10:00 -> morning_analysis (posts yesterday's grades first, then picks)"
+  - "14:00 -> refresh_lines"
+  - "hourly game window -> pregame_check"
+model_strategy: >
+  Hybrid for cost control. All fetching/scoring/grading is plain Python ($0).
+  Opus (NARRATIVE_MODEL) is spent ONLY on final pick narratives — max
+  picks-per-day calls. Sonnet (CHAT_MODEL) handles Telegram Q&A. Spend is
+  tracked in SQLite against a $100/month ceiling with Telegram alerts.
+disclaimer: >
+  Informational only. Not betting advice. AI-generated projections; verify
+  independently and bet responsibly within your means.

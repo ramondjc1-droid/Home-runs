@@ -1,0 +1,74 @@
+name: MLB K Analyst — Daily Heartbeats
+
+# GitHub Actions cron is UTC-only and ignores US daylight saving, so each ET
+# target lists both candidate UTC hours (EDT / EST) and scripts/dispatch.py
+# routes by WHICH cron fired. Duplicate fires are no-ops via per-day
+# idempotency in the DB (the hourly pregame stage self-noops instead).
+#
+# ET target -> UTC candidates:
+#   02:00 ET grader             06:00 / 07:00 UTC
+#   10:00 ET morning_analysis   14:00 / 15:00 UTC
+#   14:00 ET refresh_lines      18:00 / 19:00 UTC
+#   pregame_check               hourly 17,20-23,0-3 UTC (game window)
+
+on:
+  schedule:
+    - cron: "0 6,7 * * *"          # grader (2 AM ET)
+    - cron: "0 14,15 * * *"        # morning_analysis (10 AM ET)
+    - cron: "0 18,19 * * *"        # refresh_lines (2 PM ET)
+    - cron: "0 17,20-23,0-3 * * *" # pregame_check (hourly game window)
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Force a stage (grade | morning | lines | pregame). Blank = auto-pick by ET time."
+        required: false
+        default: ""
+
+concurrency:
+  group: mlb-k-analyst-daily
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+      WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Runners are ephemeral; the SQLite DB (picks, grades, line history,
+      # run-log idempotency, API cost tracking) must survive between runs.
+      # Restore the newest cache; save under a fresh key each run.
+      - name: Restore picks database
+        uses: actions/cache/restore@v4
+        with:
+          path: data/picks.db
+          key: picks-db-${{ github.run_id }}
+          restore-keys: |
+            picks-db-
+
+      - name: Run stage
+        run: >
+          python scripts/dispatch.py
+          --schedule "${{ github.event.schedule }}"
+          --stage "${{ github.event.inputs.stage }}"
+
+      - name: Save picks database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/picks.db
+          key: picks-db-${{ github.run_id }}
