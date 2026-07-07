@@ -54,6 +54,22 @@ homerun:
   temp_factor_per_10f: 1.03
 
 # ---------------------------------------------------------------------------
+# MONEYLINE value picks (tertiary module). Model win probability =
+# Pythagorean team strength -> log5 matchup -> home-field edge -> starter
+# quality shift (K-BB% gap). Compared to the best h2h price across books.
+# ---------------------------------------------------------------------------
+moneyline:
+  enabled: true
+  home_field_edge: 0.035         # league home teams win ~53.5%
+  pythag_exponent: 1.83          # Pythagorean run-differential exponent
+  shrink_to_mean: 0.20           # regress team strength toward .500
+  starter_kbb_weight: 0.5        # win-prob shift per point of starter K-BB% gap
+  max_starter_shift: 0.08        # cap on the starter adjustment
+  min_edge_prob: 0.04            # model win% must beat implied by 4 points
+  min_confidence: 6
+  max_picks_per_day: 2
+
+# ---------------------------------------------------------------------------
 # Park factors. k_factor / hr_factor are multiplicative (1.0 = neutral).
 # dome: true = roofed or retractable (treated as no weather risk).
 # lat/lon power the WeatherAPI lookup for outdoor parks.

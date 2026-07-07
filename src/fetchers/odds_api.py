@@ -139,6 +139,37 @@ def best_price_for(rec: dict, side: str) -> tuple[Optional[str], Optional[int]]:
     return _best_price(rec, side, rec.get("line"))
 
 
+def moneylines_for_slate() -> list[dict]:
+    """Best h2h price per team for every game — one request for the slate.
+
+    [{home_team, away_team, commence_time,
+      best: {team_full_name: [book, price]}}]
+    """
+    data = _get(f"sports/{SPORT}/odds", {
+        "regions": "us", "markets": "h2h", "oddsFormat": "american",
+    }) or []
+    out = []
+    for ev in data:
+        best: dict[str, tuple] = {}
+        for bm in ev.get("bookmakers", []):
+            for market in bm.get("markets", []):
+                if market.get("key") != "h2h":
+                    continue
+                for oc in market.get("outcomes", []):
+                    name, price = oc.get("name"), oc.get("price")
+                    if not name or price is None:
+                        continue
+                    price = int(price)
+                    if name not in best or price > best[name][1]:
+                        best[name] = (bm.get("title", bm.get("key")), price)
+        out.append({
+            "home_team": ev.get("home_team"), "away_team": ev.get("away_team"),
+            "commence_time": ev.get("commence_time"),
+            "best": {k: list(v) for k, v in best.items()},
+        })
+    return out
+
+
 def implied_prob(american: int) -> float:
     """Implied win probability from an American price (vig included)."""
     if american < 0:

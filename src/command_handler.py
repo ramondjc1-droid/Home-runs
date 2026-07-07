@@ -36,6 +36,9 @@ Free text — ask anything about the picks"""
 def _fmt_pick(p) -> str:
     if p["pick_type"] == "HR":
         line = f"💣 {p['pitcher_name']} ({p['team']}) to HR vs {p['opponent']}"
+    elif p["pick_type"] == "ML":
+        price = f" at {p['best_book_price']:+d}" if p["best_book_price"] else ""
+        line = f"🎲 {p['team']} ML vs {p['opponent']}{price}"
     else:
         line = (f"⚾ {p['pitcher_name']} ({p['team']}) {p['pick_side']} "
                 f"{p['book_line']} Ks vs {p['opponent']}")

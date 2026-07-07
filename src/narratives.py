@@ -9,7 +9,7 @@ from typing import Union
 
 import costs
 from config import ANTHROPIC_API_KEY, NARRATIVE_MODEL
-from model.scoring import HRProjection, KProjection
+from model.scoring import HRProjection, KProjection, MLProjection
 from telegram_bot import send_message
 
 SYSTEM = (
@@ -41,7 +41,18 @@ def _hr_fallback(p: HRProjection) -> str:
     )
 
 
-def _facts(p: Union[KProjection, HRProjection]) -> str:
+def _ml_fallback(p: MLProjection) -> str:
+    b = p.extras.get("breakdown", {})
+    return (
+        f"{p.team} models at {p.win_prob:.0%} to beat {p.opponent} "
+        f"(log5 {b.get('log5', 0.5):.2f}, starter shift {b.get('starter_shift', 0):+.2f}"
+        f"{', home edge' if p.is_home else ''}). "
+        f"The best price of {p.book_price:+d} implies only {p.implied_prob:.0%}, "
+        f"a {(p.edge or 0) * 100:.1f}-point value gap."
+    )
+
+
+def _facts(p: Union[KProjection, HRProjection, MLProjection]) -> str:
     if isinstance(p, KProjection):
         return (
             f"Pick: {p.pitcher_name} ({p.team}) vs {p.opponent} — "
@@ -53,17 +64,31 @@ def _facts(p: Union[KProjection, HRProjection]) -> str:
             f"Expected BF: {p.bf_expected:.1f} · Starts: {p.starts}\n"
             f"Confidence: {p.confidence}/10 · Factors: {p.conf_reasons}\n"
         )
+    if isinstance(p, HRProjection):
+        return (
+            f"Pick: {p.batter_name} ({p.team}) to hit a HR vs {p.opponent}\n"
+            f"Model P(HR): {p.hr_prob:.1%} · Implied: {p.implied_prob:.1%} "
+            f"(edge {(p.edge or 0) * 100:+.1f} pts)\n"
+            f"Adjusted HR/PA: {p.hr_pa_adj:.4f} · Factors: {p.extras}\n"
+            f"Confidence: {p.confidence}/10 · {p.conf_reasons}\n"
+        )
     return (
-        f"Pick: {p.batter_name} ({p.team}) to hit a HR vs {p.opponent}\n"
-        f"Model P(HR): {p.hr_prob:.1%} · Implied: {p.implied_prob:.1%} "
+        f"Pick: {p.extras.get('team_name', p.team)} moneyline "
+        f"{'vs' if p.is_home else '@'} {p.opponent} at {p.book_price:+d}\n"
+        f"Model win prob: {p.win_prob:.1%} · Implied: {p.implied_prob:.1%} "
         f"(edge {(p.edge or 0) * 100:+.1f} pts)\n"
-        f"Adjusted HR/PA: {p.hr_pa_adj:.4f} · Factors: {p.extras}\n"
+        f"Model breakdown: {p.extras.get('breakdown')}\n"
         f"Confidence: {p.confidence}/10 · {p.conf_reasons}\n"
     )
 
 
-def generate(p: Union[KProjection, HRProjection]) -> str:
-    fallback = _k_fallback(p) if isinstance(p, KProjection) else _hr_fallback(p)
+def generate(p: Union[KProjection, HRProjection, MLProjection]) -> str:
+    if isinstance(p, KProjection):
+        fallback = _k_fallback(p)
+    elif isinstance(p, HRProjection):
+        fallback = _hr_fallback(p)
+    else:
+        fallback = _ml_fallback(p)
     if not ANTHROPIC_API_KEY:
         return fallback
     if not costs.check_budget(alert_fn=send_message):

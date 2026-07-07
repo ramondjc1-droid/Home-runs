@@ -6,7 +6,7 @@ Every contribution is recorded in a reasons dict so /picks explanations and
 from __future__ import annotations
 
 from config import formula
-from model.scoring import HRProjection, KProjection
+from model.scoring import HRProjection, KProjection, MLProjection
 
 
 def _clamp(score: int) -> int:
@@ -49,6 +49,35 @@ def score_k_pick(proj: KProjection, *, domed_park: bool, ump_confirmed: bool,
         else:
             reasons["line_moved_against_us"] = w["line_moved_against_us"]
 
+    if stale_sources:
+        reasons["stale_data_penalty"] = w.get("stale_data_penalty", -1) * stale_sources
+
+    proj.confidence = _clamp(sum(reasons.values()))
+    proj.conf_reasons = reasons
+    return proj
+
+
+def score_ml_pick(proj: MLProjection, *, both_starters_named: bool,
+                  domed_park: bool, sample_games: int,
+                  stale_sources: int = 0) -> MLProjection:
+    """Moneyline confidence — probability-edge tiers on the win% gap."""
+    w = formula()["confidence_weights"]
+    reasons: dict[str, int] = {"base": w["base"]}
+    edge = proj.edge or 0.0
+
+    if edge >= 0.09:
+        reasons["edge_gte_1_5"] = w["edge_gte_1_5"]
+    elif edge >= 0.06:
+        reasons["edge_gte_1_0"] = w["edge_gte_1_0"]
+    elif edge >= 0.04:
+        reasons["edge_gte_0_7"] = w["edge_gte_0_7"]
+
+    if sample_games >= 60:                     # record is meaningful by June
+        reasons["sample_gte_60_games"] = w["starts_gte_5"]
+    if both_starters_named:                    # no TBD-starter coin flips
+        reasons["both_starters_named"] = 1
+    if domed_park:
+        reasons["domed_park"] = w["domed_park"]
     if stale_sources:
         reasons["stale_data_penalty"] = w.get("stale_data_penalty", -1) * stale_sources
 

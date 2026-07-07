@@ -146,3 +146,69 @@ def apply_hr_price(proj: HRProjection, price: int) -> HRProjection:
     proj.implied_prob = round(implied_prob(price), 4)
     proj.edge = round(proj.hr_prob - proj.implied_prob, 4)
     return proj
+
+
+# --- moneyline (win probability) ---------------------------------------------------
+
+@dataclass
+class MLProjection:
+    team: str                  # abbreviation of the side we like
+    team_id: int
+    opponent: str
+    game_pk: int
+    win_prob: float
+    is_home: bool
+    implied_prob: Optional[float] = None
+    edge: Optional[float] = None
+    book_price: Optional[int] = None
+    confidence: int = 0
+    conf_reasons: dict = field(default_factory=dict)
+    flags: list = field(default_factory=list)
+    extras: dict = field(default_factory=dict)
+
+
+def _pythag(rs: int, ra: int, exponent: float) -> float:
+    if rs <= 0 and ra <= 0:
+        return 0.5
+    return rs ** exponent / (rs ** exponent + ra ** exponent)
+
+
+def _log5(p_a: float, p_b: float) -> float:
+    """Probability team A beats team B given each one's true strength."""
+    num = p_a * (1.0 - p_b)
+    den = num + p_b * (1.0 - p_a)
+    return num / den if den > 0 else 0.5
+
+
+def project_home_win_prob(*, home_rec: dict, away_rec: dict,
+                          home_kbb: Optional[float],
+                          away_kbb: Optional[float]) -> tuple[float, dict]:
+    """(home win probability, breakdown) from records + starter quality."""
+    cfg = formula()["moneyline"]
+    exp = cfg.get("pythag_exponent", 1.83)
+    shrink = cfg.get("shrink_to_mean", 0.20)
+
+    p_home = (1 - shrink) * _pythag(home_rec["rs"], home_rec["ra"], exp) + shrink * 0.5
+    p_away = (1 - shrink) * _pythag(away_rec["rs"], away_rec["ra"], exp) + shrink * 0.5
+    matchup = _log5(p_home, p_away)
+
+    hfa = cfg.get("home_field_edge", 0.035)
+
+    starter_shift = 0.0
+    if home_kbb is not None and away_kbb is not None:
+        cap = cfg.get("max_starter_shift", 0.08)
+        starter_shift = max(-cap, min(cap,
+                            (home_kbb - away_kbb) * cfg.get("starter_kbb_weight", 0.5)))
+
+    prob = max(0.05, min(0.95, matchup + hfa + starter_shift))
+    return prob, {"pythag_home": round(p_home, 3), "pythag_away": round(p_away, 3),
+                  "log5": round(matchup, 3), "hfa": hfa,
+                  "starter_shift": round(starter_shift, 3)}
+
+
+def apply_ml_price(proj: MLProjection, price: int) -> MLProjection:
+    from fetchers.odds_api import implied_prob
+    proj.book_price = price
+    proj.implied_prob = round(implied_prob(price), 4)
+    proj.edge = round(proj.win_prob - proj.implied_prob, 4)
+    return proj

@@ -29,7 +29,13 @@ live via the `/tune` Telegram command.
 
 The **home run module** models `P(HR) = 1 − (1 − adjusted HR/PA)^4.1` and
 takes the top 2 batters whose model probability beats the book's implied
-probability by ≥ 3 points.
+probability by ≥ 4 points.
+
+The **moneyline module** models each game's win probability — Pythagorean
+team strength (regressed 20% to .500) → log5 matchup → +3.5 pt home-field
+edge → starter K-BB% shift (capped ±8 pts) — and surfaces up to 2 sides per
+day whose model win% beats the best book's implied probability by ≥ 4 points
+(never both sides of one game). Tunable under `moneyline:` in the config.
 
 ## Data sources (free tier friendly)
 

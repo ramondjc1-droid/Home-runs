@@ -46,6 +46,11 @@ def grade_pick(p) -> tuple[str, Optional[int]]:
         return "VOID", None
     if not mlb.game_final(p["game_pk"]):
         return "PENDING", None
+    if p["pick_type"] == "ML":
+        winner = mlb.game_winner(p["game_pk"])
+        if winner is None:
+            return "VOID", None
+        return ("HIT" if winner == p["pitcher_id"] else "MISS"), None
     if p["pick_type"] == "HR":
         hr = mlb.actual_home_runs(p["game_pk"], p["pitcher_id"])
         if hr is None:

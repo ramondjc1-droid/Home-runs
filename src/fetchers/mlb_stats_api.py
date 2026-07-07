@@ -29,6 +29,8 @@ class Game:
     home_pitcher: Optional[dict]  # {"id": int, "name": str} or None
     away_pitcher: Optional[dict]
     status: str = ""
+    home_team_name: str = ""      # full name, for matching odds events
+    away_team_name: str = ""
     extras: dict = field(default_factory=dict)
 
 
@@ -69,6 +71,8 @@ def todays_slate(d: Optional[str] = None) -> list[Game]:
                 home_pitcher=_pp(home),
                 away_pitcher=_pp(away),
                 status=(g.get("status") or {}).get("abstractGameState", ""),
+                home_team_name=home["team"].get("name", ""),
+                away_team_name=away["team"].get("name", ""),
             ))
     return games
 
@@ -117,6 +121,7 @@ def pitcher_k_profile(pid: int, season: Optional[int] = None) -> Optional[dict]:
     so = int(stats.get("strikeOuts") or 0)
     starts = int(stats.get("gamesStarted") or 0)
     hr = int(stats.get("homeRuns") or 0)
+    bb = int(stats.get("baseOnBalls") or 0)
     if bf == 0:
         return None
 
@@ -143,6 +148,7 @@ def pitcher_k_profile(pid: int, season: Optional[int] = None) -> Optional[dict]:
         "ip_last5_mean": ip5,
         "starts": starts,
         "hr_per_bf": hr / bf,
+        "kbb_pct": (so - bb) / bf,   # K-BB%, the starter-quality shorthand
     }
 
 
@@ -165,6 +171,43 @@ def team_k_pct_recent(team_id: int, days: int = 15,
         return so / pa if pa >= 100 else None
     except (KeyError, IndexError, TypeError):
         return None
+
+
+# --- team records (moneyline module) -----------------------------------------------
+
+def standings(season: Optional[int] = None) -> Optional[dict]:
+    """{team_id: {w, l, rs, ra}} from the regular-season standings."""
+    season = season or date.today().year
+    data = _get("standings", {
+        "leagueId": "103,104", "season": season,
+        "standingsTypes": "regularSeason",
+    })
+    if not data:
+        return None
+    out: dict[int, dict] = {}
+    for rec in data.get("records", []):
+        for tr in rec.get("teamRecords", []):
+            out[tr["team"]["id"]] = {
+                "w": int(tr.get("wins") or 0),
+                "l": int(tr.get("losses") or 0),
+                "rs": int(tr.get("runsScored") or 0),
+                "ra": int(tr.get("runsAllowed") or 0),
+            }
+    return out or None
+
+
+def game_winner(game_pk: int) -> Optional[int]:
+    """Winning team_id for a final game, else None."""
+    sched = _get("schedule", {"sportId": 1, "gamePk": game_pk})
+    try:
+        game = sched["dates"][0]["games"][0]
+        for side in ("home", "away"):
+            t = game["teams"][side]
+            if t.get("isWinner"):
+                return t["team"]["id"]
+    except (KeyError, IndexError, TypeError):
+        pass
+    return None
 
 
 # --- batters (HR module) ----------------------------------------------------------

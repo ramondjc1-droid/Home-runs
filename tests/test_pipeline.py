@@ -76,6 +76,52 @@ def test_implied_prob():
     assert implied_prob(+150) == pytest.approx(100 / 250)
 
 
+def test_moneyline_win_prob_and_edge():
+    from model import scoring
+    # Even teams, no starter info: home team gets exactly the HFA bump.
+    rec = {"w": 45, "l": 45, "rs": 400, "ra": 400}
+    prob, breakdown = scoring.project_home_win_prob(
+        home_rec=rec, away_rec=rec, home_kbb=None, away_kbb=None)
+    assert prob == pytest.approx(0.535, abs=0.001)
+    assert breakdown["log5"] == pytest.approx(0.5, abs=0.001)
+
+    # Strong home team + better starter beats a weak road team convincingly.
+    strong = {"w": 55, "l": 35, "rs": 480, "ra": 380}
+    weak = {"w": 35, "l": 55, "rs": 370, "ra": 460}
+    prob2, _ = scoring.project_home_win_prob(
+        home_rec=strong, away_rec=weak, home_kbb=0.20, away_kbb=0.10)
+    assert prob2 > 0.62
+
+    p = scoring.MLProjection(team="TEX", team_id=140, opponent="LAA",
+                             game_pk=1, win_prob=round(prob2, 4), is_home=True)
+    scoring.apply_ml_price(p, +105)
+    assert p.implied_prob == pytest.approx(100 / 205, abs=0.001)
+    assert p.edge == pytest.approx(p.win_prob - p.implied_prob, abs=0.001)
+
+
+def test_ml_confidence_and_grading():
+    from model import confidence, scoring
+    p = scoring.MLProjection(team="TEX", team_id=140, opponent="LAA",
+                             game_pk=1, win_prob=0.58, is_home=True)
+    scoring.apply_ml_price(p, +120)   # implied ~0.4545 -> edge ~0.125
+    confidence.score_ml_pick(p, both_starters_named=True, domed_park=True,
+                             sample_games=90)
+    # base2 + edge_gte_0.09→4 + sample1 + starters1 + dome1 = 9
+    assert p.confidence == 9
+
+    # Grading: ML pick HIT when the stored team_id wins.
+    import grader
+    from unittest.mock import patch
+    row = {"pick_type": "ML", "game_pk": 7, "pitcher_id": 140,
+           "book_line": None, "pick_side": "ML"}
+    with patch.object(grader.mlb, "game_final", return_value=True), \
+         patch.object(grader.mlb, "game_winner", return_value=140):
+        assert grader.grade_pick(row) == ("HIT", None)
+    with patch.object(grader.mlb, "game_final", return_value=True), \
+         patch.object(grader.mlb, "game_winner", return_value=108):
+        assert grader.grade_pick(row) == ("MISS", None)
+
+
 # --- confidence ------------------------------------------------------------------
 
 def _proj(edge: float, starts: int = 10):

@@ -34,10 +34,17 @@ Projected_Ks  = BF_expected × Adjusted_K
 Edge          = Projected_Ks − Book_Line     → OVER if +, UNDER if −
 
 HR module:
-HR/PA_blended = 0.7 × HR/PA_30d + 0.3 × HR/PA_season
-HR/PA_adj     = blended × ParkHRF × PitcherHRF × TempF
+HR/PA_blended = 0.7 × HR/PA_30d + 0.3 × HR/PA_season   (then 25% league shrink)
+HR/PA_adj     = blended × ParkHRF × PitcherHRF(clamped 0.8-1.25) × TempF
 P(HR)         = 1 − (1 − HR/PA_adj)^4.1
 Edge          = P(HR) − implied_prob(best Yes price)
+
+Moneyline module:
+strength      = Pythagorean(RS, RA, 1.83), regressed 20% to .500 (standings API)
+P(home win)   = log5(home, away) + 0.035 HFA + starter K-BB% gap × 0.5 (cap ±0.08)
+Edge          = model win% − implied_prob(best h2h price); ≥4 pts qualifies,
+                max 2/day, never both sides of a game. Graded via the game
+                winner (picks.pitcher_id stores the team_id for ML rows).
 ```
 
 All weights, thresholds, park factors, and ump factors live in

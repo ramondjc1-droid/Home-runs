@@ -214,10 +214,68 @@ def analyze_slate(verbose: bool = True) -> tuple[list, list, list[str]]:
                         injury_flags=False, pa_season=bprof["pa_season"])
                     hr_projs.append(hp)
 
-    return k_projs, hr_projs, flags
+    # Moneyline module: team win probability vs best h2h price.
+    ml_projs = []
+    ml_cfg = f.get("moneyline", {})
+    if ml_cfg.get("enabled", True) and odds_api.configured():
+        recs, recs_fresh = fetch_cached("standings", mlb.standings)
+        ml_odds, _ = fetch_cached("ml_lines_morning", odds_api.moneylines_for_slate)
+        if recs and ml_odds:
+            if not recs_fresh:
+                flags.append("standings stale — cached records used")
+            by_names = {(e["home_team"].lower(), e["away_team"].lower()): e
+                        for e in ml_odds if e.get("home_team") and e.get("away_team")}
+            for g in games:
+                home_rec, away_rec = recs.get(str(g.home_team_id)) or recs.get(g.home_team_id), \
+                                     recs.get(str(g.away_team_id)) or recs.get(g.away_team_id)
+                if not home_rec or not away_rec:
+                    continue
+
+                def _kbb(p):
+                    if not p:
+                        return None
+                    prof, _ = fetch_cached(f"pitcher_{p['id']}",
+                                           lambda pid=p["id"]: mlb.pitcher_k_profile(pid))
+                    return (prof or {}).get("kbb_pct")
+
+                home_kbb, away_kbb = _kbb(g.home_pitcher), _kbb(g.away_pitcher)
+                prob_home, breakdown = scoring.project_home_win_prob(
+                    home_rec=home_rec, away_rec=away_rec,
+                    home_kbb=home_kbb, away_kbb=away_kbb)
+
+                ev = by_names.get((g.home_team_name.lower(), g.away_team_name.lower()))
+                if not ev:
+                    continue
+                park = _park_info(g.venue)
+                sample = min(home_rec["w"] + home_rec["l"],
+                             away_rec["w"] + away_rec["l"])
+                both_named = bool(g.home_pitcher and g.away_pitcher)
+                for team_abbr, team_id, team_name, opp_abbr, prob, is_home in (
+                    (g.home_team, g.home_team_id, g.home_team_name,
+                     g.away_team, prob_home, True),
+                    (g.away_team, g.away_team_id, g.away_team_name,
+                     g.home_team, 1.0 - prob_home, False),
+                ):
+                    priced = ev["best"].get(team_name)
+                    if not priced:
+                        continue
+                    book, price = priced
+                    proj = scoring.MLProjection(
+                        team=team_abbr, team_id=team_id, opponent=opp_abbr,
+                        game_pk=g.game_pk, win_prob=round(prob, 4), is_home=is_home)
+                    scoring.apply_ml_price(proj, price)
+                    proj.extras.update({"best_book": book, "breakdown": breakdown,
+                                        "first_pitch_utc": g.game_date_utc,
+                                        "team_name": team_name})
+                    confidence.score_ml_pick(
+                        proj, both_starters_named=both_named,
+                        domed_park=bool(park.get("dome")), sample_games=sample)
+                    ml_projs.append(proj)
+
+    return k_projs, hr_projs, ml_projs, flags
 
 
-def select_picks(k_projs: list, hr_projs: list) -> tuple[list, list]:
+def select_picks(k_projs: list, hr_projs: list, ml_projs: list) -> tuple[list, list, list]:
     f = formula()
     thr = f["thresholds"]
     qualified = [p for p in k_projs
@@ -242,7 +300,22 @@ def select_picks(k_projs: list, hr_projs: list) -> tuple[list, list]:
         hr_picks.append(p)
         if len(hr_picks) >= hr_cfg.get("max_picks_per_day", 2):
             break
-    return k_picks, hr_picks
+
+    ml_cfg = f.get("moneyline", {})
+    ml_q = [p for p in ml_projs
+            if p.edge is not None
+            and p.edge >= ml_cfg.get("min_edge_prob", 0.04)
+            and p.confidence >= ml_cfg.get("min_confidence", 6)]
+    ml_q.sort(key=lambda p: (p.confidence, p.edge or 0), reverse=True)
+    seen_games, ml_picks = set(), []   # never both sides of one game
+    for p in ml_q:
+        if p.game_pk in seen_games:
+            continue
+        seen_games.add(p.game_pk)
+        ml_picks.append(p)
+        if len(ml_picks) >= ml_cfg.get("max_picks_per_day", 2):
+            break
+    return k_picks, hr_picks, ml_picks
 
 
 def _persist_k(p) -> int:
@@ -286,24 +359,41 @@ def _persist_hr(p) -> int:
     return pick_id
 
 
+def _persist_ml(p) -> int:
+    pick_id = db.insert_pick({
+        "date": date.today().isoformat(), "pick_type": "ML",
+        "pitcher_name": p.extras.get("team_name", p.team), "pitcher_id": p.team_id,
+        "team": p.team, "opponent": p.opponent, "game_pk": p.game_pk,
+        "first_pitch_utc": p.extras.get("first_pitch_utc"),
+        "book_line": p.implied_prob, "best_book_name": p.extras.get("best_book"),
+        "best_book_price": p.book_price,
+        "my_projection": p.win_prob, "edge": p.edge,
+        "confidence": p.confidence, "pick_side": "ML",
+        "narrative": p.extras.get("narrative"),
+        "metrics_json": json.dumps(
+            {"conf_reasons": p.conf_reasons, **p.extras}, default=str),
+    })
+    return pick_id
+
+
 def run(dry_run: bool = False, verbose: bool = True) -> list:
     db.init_db()
     started = datetime.now()
 
-    k_projs, hr_projs, flags = analyze_slate(verbose=verbose)
-    if not k_projs and not hr_projs:
+    k_projs, hr_projs, ml_projs, flags = analyze_slate(verbose=verbose)
+    if not k_projs and not hr_projs and not ml_projs:
         body = cards.no_slate() if not flags else (
             "⚠️ <b>Morning analysis failed</b> — " + "; ".join(flags))
         print(body) if dry_run else send_message(body)
         return []
 
-    k_picks, hr_picks = select_picks(k_projs, hr_projs)
+    k_picks, hr_picks, ml_picks = select_picks(k_projs, hr_projs, ml_projs)
     if verbose:
         print(f"[scan] {len(k_projs)} pitchers projected, "
-              f"{len(k_picks)} K picks + {len(hr_picks)} HR picks qualify")
+              f"{len(k_picks)} K + {len(hr_picks)} HR + {len(ml_picks)} ML picks qualify")
 
     # Narratives (Opus, budget-gated) + card blocks.
-    k_blocks, hr_blocks = [], []
+    k_blocks, hr_blocks, ml_blocks = [], [], []
     for i, p in enumerate(k_picks):
         p.extras["narrative"] = narratives.generate(p)
         k_blocks.append(cards.k_pick_block(i, p, p.extras["narrative"]))
@@ -311,9 +401,13 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
     for i, p in enumerate(hr_picks):
         p.extras["narrative"] = narratives.generate(p)
         hr_blocks.append(cards.hr_pick_block(i, p, p.extras["narrative"]))
+    for i, p in enumerate(ml_picks):
+        p.extras["narrative"] = narratives.generate(p)
+        ml_blocks.append(cards.ml_pick_block(i, p, p.extras["narrative"]))
 
     grade = cards.grade_report()
-    card = cards.morning_card(k_blocks, hr_blocks, sorted(set(flags)))
+    card = cards.morning_card(k_blocks, hr_blocks, sorted(set(flags)),
+                              ml_blocks=ml_blocks)
 
     if dry_run:
         print("\n" + "=" * 60)
@@ -322,9 +416,11 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
         print(card)
         print("=" * 60)
         print("\n[dry-run] nothing saved or sent. Re-run without --dry-run to go live.")
-        return k_picks + hr_picks
+        return k_picks + hr_picks + ml_picks
 
-    ids = [_persist_k(p) for p in k_picks] + [_persist_hr(p) for p in hr_picks]
+    ids = ([_persist_k(p) for p in k_picks]
+           + [_persist_hr(p) for p in hr_picks]
+           + [_persist_ml(p) for p in ml_picks])
     ok = True
     if grade:
         ok = send_message(grade)
@@ -336,7 +432,7 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
     elapsed = (datetime.now() - started).total_seconds()
     if verbose:
         print(f"[scan] done in {elapsed:.0f}s — {len(ids)} picks saved.")
-    return k_picks + hr_picks
+    return k_picks + hr_picks + ml_picks
 
 
 def main(argv=None) -> int:

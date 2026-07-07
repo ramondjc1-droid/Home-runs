@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from typing import Optional
 
 import db
-from model.scoring import HRProjection, KProjection
+from model.scoring import HRProjection, KProjection, MLProjection
 
 NUM = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"]
 RULE = "─" * 24
@@ -66,8 +66,25 @@ def hr_pick_block(i: int, p: HRProjection, narrative: str) -> str:
     return "\n".join(lines)
 
 
+def ml_pick_block(i: int, p: MLProjection, narrative: str) -> str:
+    n = NUM[i] if i < len(NUM) else f"{i + 1}."
+    where = "vs" if p.is_home else "@"
+    lines = [
+        f"{n} <b>{p.team} ML</b> {where} {p.opponent}",
+        f"   🎲 <b>{p.extras.get('team_name', p.team)} to win</b> at {_price(p.book_price)}",
+        f"   📈 Model: {p.win_prob:.0%} | Implied: {p.implied_prob:.0%} "
+        f"| Edge: {(p.edge or 0) * 100:+.1f} pts",
+        f"   💪 Confidence: {p.confidence}/10",
+        f"   📖 Best line: {p.extras.get('best_book') or 'n/a'}",
+        "",
+        f"   <i>{narrative}</i>",
+    ]
+    return "\n".join(lines)
+
+
 def morning_card(k_blocks: list[str], hr_blocks: list[str],
-                 flags: list[str], d: Optional[str] = None) -> str:
+                 flags: list[str], d: Optional[str] = None,
+                 ml_blocks: Optional[list[str]] = None) -> str:
     d = d or date.today().isoformat()
     parts = [f"⚾ <b>MLB K PICKS — {d}</b>", "", scoreboard(), "", RULE, ""]
     if k_blocks:
@@ -78,6 +95,9 @@ def morning_card(k_blocks: list[str], hr_blocks: list[str],
     if hr_blocks:
         parts += ["", RULE, "", "💣 <b>HOME RUN PICKS</b>", ""]
         parts.append("\n\n".join(hr_blocks))
+    if ml_blocks:
+        parts += ["", RULE, "", "🎲 <b>MONEYLINE VALUE</b>", ""]
+        parts.append("\n\n".join(ml_blocks))
     parts += ["", RULE, ""]
     parts.append("⚠️ Flags: " + ("; ".join(flags) if flags else "none"))
     parts.append("🕒 Lines will refresh at 2 PM ET")
@@ -98,6 +118,11 @@ def grade_report(d: Optional[str] = None) -> Optional[str]:
         actual = p["actual_ks"]
         if p["pick_type"] == "HR":
             what = f"to hit a HR → {'homered' if p['result'] == 'HIT' else 'no HR'}"
+        elif p["pick_type"] == "ML":
+            price = p["best_book_price"]
+            what = (f"ML ({price:+d}) → {'won' if p['result'] == 'HIT' else 'lost'}"
+                    if price else
+                    f"ML → {'won' if p['result'] == 'HIT' else 'lost'}")
         else:
             what = f"{p['pick_side']} {p['book_line']} → {actual} Ks"
         if p["result"] == "VOID":
