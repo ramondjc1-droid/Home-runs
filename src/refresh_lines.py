@@ -37,10 +37,13 @@ def check_lines(stage: str, only_pregame: bool = False,
         lines.update(odds_api.lines_for_slate(odds_api.HR_MARKET))
 
     threshold = formula()["thresholds"].get("line_move_alert", 0.5)
-    alerts = []
+    alerts, status = [], []
     for p in picks:
         rec = lines.get(odds_api.norm_name(p["pitcher_name"]))
+        label = f"<b>{p['pitcher_name']}</b> {p['pick_side']} {p['book_line']}"
         if not rec or rec.get("line") is None:
+            if p["pick_type"] in ("K", "HR"):
+                status.append(f"• {label} — no live line (book pulled it)")
             continue
         new_line = rec["line"]
         _, price = odds_api.best_price_for(rec, p["pick_side"] or "OVER")
@@ -49,27 +52,42 @@ def check_lines(stage: str, only_pregame: bool = False,
             db.mark_pregame_checked(p["id"])
 
         if p["pick_type"] != "K":
+            status.append(f"• {label} — holding")
             continue
         move = new_line - p["book_line"]
         if abs(move) < threshold:
+            status.append(f"• {label} — now {new_line} "
+                          f"({'steady' if move == 0 else f'{move:+.1f}'})")
             continue
         # Line moving in our pick's direction = market agrees; against = fade.
         toward = (move > 0) == (p["pick_side"] == "OVER")
         arrow = "📈" if move > 0 else "📉"
         verdict = "✅ market agrees" if toward else "🚩 moved AGAINST us"
         alerts.append(
-            f"{arrow} <b>{p['pitcher_name']}</b> {p['pick_side']} "
-            f"{p['book_line']} → line now <b>{new_line}</b> "
+            f"{arrow} {label} → line now <b>{new_line}</b> "
             f"({move:+.1f}) — {verdict}"
         )
 
+    if only_pregame:
+        # Pregame stays alert-only: an hourly "all steady" ping is noise.
+        if alerts:
+            body = "⏱ <b>Pregame line check</b>\n\n" + "\n".join(alerts)
+            print(body) if dry_run else send_message(body)
+        else:
+            print(f"[{stage}] {len(picks)} picks checked — no moves ≥ {threshold}.")
+        return alerts
+
+    # The 2 PM refresh ALWAYS reports, so a quiet day is visibly quiet
+    # rather than indistinguishable from a failure.
+    parts = ["🔄 <b>2 PM LINE REFRESH</b>"]
     if alerts:
-        header = ("⏱ <b>Pregame line check</b>" if only_pregame
-                  else "🔄 <b>2 PM line refresh</b>")
-        body = header + "\n\n" + "\n".join(alerts)
-        print(body) if dry_run else send_message(body)
-    else:
-        print(f"[{stage}] {len(picks)} picks checked — no moves ≥ {threshold}.")
+        parts += ["", "\n".join(alerts)]
+    if status:
+        parts += ["", "\n".join(status)]
+    if not alerts:
+        parts += ["", f"No moves ≥ {threshold} — all picks holding steady. 👍"]
+    body = "\n".join(parts)
+    print(body) if dry_run else send_message(body)
     return alerts
 
 
