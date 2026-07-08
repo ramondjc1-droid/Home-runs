@@ -6,7 +6,8 @@ from config import today_et
 from typing import Optional
 
 import db
-from model.scoring import HRProjection, KProjection, MLProjection
+from model.scoring import (HRProjection, KProjection, MLProjection,
+                           TotalProjection)
 
 NUM = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"]
 RULE = "─" * 24
@@ -83,6 +84,20 @@ def ml_pick_block(i: int, p: MLProjection, narrative: str) -> str:
     return "\n".join(lines)
 
 
+def tot_pick_block(i: int, p: TotalProjection, narrative: str) -> str:
+    n = NUM[i] if i < len(NUM) else f"{i + 1}."
+    lines = [
+        f"{n} <b>{p.matchup}</b>",
+        f"   🔢 <b>{p.side} {p.book_line} runs</b>",
+        f"   📈 Projection: {p.projected_runs:.1f} | Edge: {p.edge:+.1f}",
+        f"   💪 Confidence: {p.confidence}/10",
+        f"   📖 Best line: {p.extras.get('best_book') or 'n/a'} at {_price(p.book_price)}",
+        "",
+        f"   <i>{narrative}</i>",
+    ]
+    return "\n".join(lines)
+
+
 def ml_board(projs: list[MLProjection], picked_pks: set[int]) -> Optional[str]:
     """One line per game: the model's value side vs the market, best edge first.
 
@@ -113,7 +128,8 @@ def ml_board(projs: list[MLProjection], picked_pks: set[int]) -> Optional[str]:
 def morning_card(k_blocks: list[str], hr_blocks: list[str],
                  flags: list[str], d: Optional[str] = None,
                  ml_blocks: Optional[list[str]] = None,
-                 ml_board_text: Optional[str] = None) -> str:
+                 ml_board_text: Optional[str] = None,
+                 tot_blocks: Optional[list[str]] = None) -> str:
     d = d or today_et().isoformat()
     parts = [f"⚾ <b>MLB K PICKS — {d}</b>", "", scoreboard(), "", RULE, ""]
     if k_blocks:
@@ -124,6 +140,9 @@ def morning_card(k_blocks: list[str], hr_blocks: list[str],
     if hr_blocks:
         parts += ["", RULE, "", "💣 <b>HOME RUN PICKS</b>", ""]
         parts.append("\n\n".join(hr_blocks))
+    if tot_blocks:
+        parts += ["", RULE, "", "🔢 <b>TOTALS — O/U RUNS</b>", ""]
+        parts.append("\n\n".join(tot_blocks))
     if ml_blocks:
         parts += ["", RULE, "", "🎲 <b>MONEYLINE VALUE</b>", ""]
         parts.append("\n\n".join(ml_blocks))
@@ -154,6 +173,8 @@ def grade_report(d: Optional[str] = None) -> Optional[str]:
             what = (f"ML ({price:+d}) → {'won' if p['result'] == 'HIT' else 'lost'}"
                     if price else
                     f"ML → {'won' if p['result'] == 'HIT' else 'lost'}")
+        elif p["pick_type"] == "TOT":
+            what = f"{p['pick_side']} {p['book_line']} runs → {actual}"
         else:
             what = f"{p['pick_side']} {p['book_line']} → {actual} Ks"
         if p["result"] == "VOID":

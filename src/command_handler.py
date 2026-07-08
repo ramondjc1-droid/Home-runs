@@ -39,6 +39,9 @@ def _fmt_pick(p) -> str:
     elif p["pick_type"] == "ML":
         price = f" at {p['best_book_price']:+d}" if p["best_book_price"] else ""
         line = f"🎲 {p['team']} ML vs {p['opponent']}{price}"
+    elif p["pick_type"] == "TOT":
+        line = (f"🔢 {p['pitcher_name']} {p['pick_side']} "
+                f"{p['book_line']} runs")
     else:
         line = (f"⚾ {p['pitcher_name']} ({p['team']}) {p['pick_side']} "
                 f"{p['book_line']} Ks vs {p['opponent']}")

@@ -6,7 +6,8 @@ Every contribution is recorded in a reasons dict so /picks explanations and
 from __future__ import annotations
 
 from config import formula
-from model.scoring import HRProjection, KProjection, MLProjection
+from model.scoring import (HRProjection, KProjection, MLProjection,
+                           TotalProjection)
 
 
 def _clamp(score: int) -> int:
@@ -78,6 +79,37 @@ def score_ml_pick(proj: MLProjection, *, both_starters_named: bool,
         reasons["both_starters_named"] = 1
     if domed_park:
         reasons["domed_park"] = w["domed_park"]
+    if stale_sources:
+        reasons["stale_data_penalty"] = w.get("stale_data_penalty", -1) * stale_sources
+
+    proj.confidence = _clamp(sum(reasons.values()))
+    proj.conf_reasons = reasons
+    return proj
+
+
+def score_total_pick(proj: TotalProjection, *, both_starters_named: bool,
+                     domed_park: bool, sample_games: int, rain_risk: bool,
+                     stale_sources: int = 0) -> TotalProjection:
+    """Totals confidence — edge tiers in runs (0.75 / 1.25 / 2.0)."""
+    w = formula()["confidence_weights"]
+    reasons: dict[str, int] = {"base": w["base"]}
+    edge = abs(proj.edge or 0.0)
+
+    if edge >= 2.0:
+        reasons["edge_gte_1_5"] = w["edge_gte_1_5"]
+    elif edge >= 1.25:
+        reasons["edge_gte_1_0"] = w["edge_gte_1_0"]
+    elif edge >= 0.75:
+        reasons["edge_gte_0_7"] = w["edge_gte_0_7"]
+
+    if sample_games >= 60:
+        reasons["sample_gte_60_games"] = w["starts_gte_5"]
+    if both_starters_named:
+        reasons["both_starters_named"] = 1
+    if domed_park:
+        reasons["domed_park"] = w["domed_park"]
+    if rain_risk:                          # shortened game kills an over
+        reasons["rain_risk"] = -2
     if stale_sources:
         reasons["stale_data_penalty"] = w.get("stale_data_penalty", -1) * stale_sources
 

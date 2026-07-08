@@ -122,6 +122,60 @@ def test_ml_confidence_and_grading():
         assert grader.grade_pick(row) == ("MISS", None)
 
 
+def test_total_runs_projection():
+    from model import scoring
+    # League-average teams, neutral park, league-average starters, 70F:
+    # each side expects ~4.4 → total ~8.8.
+    rec = {"w": 45, "l": 45, "rs": 396, "ra": 396}  # 4.4 rs/ra per game
+    total, b = scoring.project_total_runs(
+        home_rec=rec, away_rec=rec, home_kbb=0.145, away_kbb=0.145,
+        park_run_factor=1.0, temp_f=70.0)
+    assert total == pytest.approx(8.8, abs=0.05)
+    assert b["starter_shift"] == pytest.approx(0.0, abs=0.01)
+
+    # Coors, two bad starters, hot day → meaningfully higher total.
+    weak = {"w": 45, "l": 45, "rs": 430, "ra": 460}
+    total2, _ = scoring.project_total_runs(
+        home_rec=weak, away_rec=weak, home_kbb=0.06, away_kbb=0.06,
+        park_run_factor=1.28, temp_f=90.0)
+    assert total2 > 12.0
+
+    p = scoring.TotalProjection(home_team="COL", away_team="SD", game_pk=1,
+                                projected_runs=round(total2, 2))
+    scoring.apply_total_line(p, 11.5, -110, -110)
+    assert p.side == "OVER" and p.edge > 0.5 and p.book_price == -110
+    assert p.matchup == "SD @ COL"
+
+
+def test_total_confidence_and_grading():
+    from model import confidence, scoring
+    p = scoring.TotalProjection(home_team="COL", away_team="SD", game_pk=1,
+                                projected_runs=13.1)
+    scoring.apply_total_line(p, 11.5, -105, -115)
+    confidence.score_total_pick(p, both_starters_named=True, domed_park=False,
+                                sample_games=90, rain_risk=False)
+    # base2 + edge1.6→tier(1.25)3 + sample1 + starters1 = 7
+    assert p.confidence == 7
+    rain = scoring.TotalProjection(home_team="COL", away_team="SD", game_pk=1,
+                                   projected_runs=13.1)
+    scoring.apply_total_line(rain, 11.5, -105, -115)
+    confidence.score_total_pick(rain, both_starters_named=True, domed_park=False,
+                                sample_games=90, rain_risk=True)
+    assert rain.confidence == 5  # rain −2
+
+    import grader
+    from unittest.mock import patch
+    row = {"pick_type": "TOT", "game_pk": 9, "pitcher_id": None,
+           "book_line": 8.5, "pick_side": "OVER"}
+    with patch.object(grader.mlb, "game_final", return_value=True), \
+         patch.object(grader.mlb, "final_total_runs", return_value=11):
+        assert grader.grade_pick(row) == ("HIT", 11)
+    row2 = dict(row, book_line=9.0)
+    with patch.object(grader.mlb, "game_final", return_value=True), \
+         patch.object(grader.mlb, "final_total_runs", return_value=9):
+        assert grader.grade_pick(row2) == ("PUSH", 9)
+
+
 # --- confidence ------------------------------------------------------------------
 
 def _proj(edge: float, starts: int = 10):

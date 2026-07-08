@@ -212,3 +212,81 @@ def apply_ml_price(proj: MLProjection, price: int) -> MLProjection:
     proj.implied_prob = round(implied_prob(price), 4)
     proj.edge = round(proj.win_prob - proj.implied_prob, 4)
     return proj
+
+
+# --- totals (over/under runs) --------------------------------------------------
+
+@dataclass
+class TotalProjection:
+    home_team: str
+    away_team: str
+    game_pk: int
+    projected_runs: float
+    book_line: Optional[float] = None
+    edge: Optional[float] = None          # projected − line (runs)
+    side: Optional[str] = None            # 'OVER' or 'UNDER'
+    book_price: Optional[int] = None
+    confidence: int = 0
+    conf_reasons: dict = field(default_factory=dict)
+    flags: list = field(default_factory=list)
+    extras: dict = field(default_factory=dict)
+
+    @property
+    def matchup(self) -> str:
+        return f"{self.away_team} @ {self.home_team}"
+
+
+def project_total_runs(*, home_rec: dict, away_rec: dict,
+                       home_kbb: Optional[float], away_kbb: Optional[float],
+                       park_run_factor: float,
+                       temp_f: Optional[float]) -> tuple[float, dict]:
+    """(expected total runs, breakdown).
+
+    Each side's expectation = own offense x opponent defense / league (both
+    per-game rates regressed toward league average); the sum is scaled by the
+    park run factor, shifted down for quality starters (K-BB% above league),
+    and nudged by game-time temperature at outdoor parks.
+    """
+    cfg = formula()["totals"]
+    L = cfg["league_runs_per_team"]
+    shrink = cfg.get("shrink_to_mean", 0.20)
+
+    def _rate(rec: dict, key: str) -> float:
+        games = max(rec["w"] + rec["l"], 1)
+        raw = rec[key] / games
+        return (1 - shrink) * raw + shrink * L
+
+    off_h, def_h = _rate(home_rec, "rs"), _rate(home_rec, "ra")
+    off_a, def_a = _rate(away_rec, "rs"), _rate(away_rec, "ra")
+    exp_home = off_h * def_a / L
+    exp_away = off_a * def_h / L
+    base = (exp_home + exp_away) * park_run_factor
+
+    league_kbb = cfg.get("league_kbb_pct", 0.145)
+    w = cfg.get("starter_kbb_runs_weight", 6.0)
+    cap = cfg.get("max_starter_runs_shift", 0.8)
+    shift = 0.0
+    for kbb in (home_kbb, away_kbb):
+        if kbb is not None:
+            shift -= max(-cap, min(cap, (kbb - league_kbb) * w))
+
+    temp_shift = 0.0
+    if temp_f is not None:
+        temp_shift = max(-0.9, min(0.9,
+                         (temp_f - 70.0) / 10.0 * cfg.get("temp_runs_per_10f", 0.3)))
+
+    total = max(4.0, base + shift + temp_shift)
+    return total, {"exp_home": round(exp_home, 2), "exp_away": round(exp_away, 2),
+                   "park_run_factor": park_run_factor,
+                   "starter_shift": round(shift, 2),
+                   "temp_shift": round(temp_shift, 2)}
+
+
+def apply_total_line(proj: TotalProjection, line: float,
+                     over_price: Optional[int],
+                     under_price: Optional[int]) -> TotalProjection:
+    proj.book_line = line
+    proj.edge = round(proj.projected_runs - line, 2)
+    proj.side = "OVER" if proj.edge > 0 else "UNDER"
+    proj.book_price = over_price if proj.side == "OVER" else under_price
+    return proj

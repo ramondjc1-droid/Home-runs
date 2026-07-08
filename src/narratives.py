@@ -9,7 +9,8 @@ from typing import Union
 
 import costs
 from config import ANTHROPIC_API_KEY, NARRATIVE_MODEL
-from model.scoring import HRProjection, KProjection, MLProjection
+from model.scoring import (HRProjection, KProjection, MLProjection,
+                           TotalProjection)
 from telegram_bot import send_message
 
 SYSTEM = (
@@ -52,7 +53,19 @@ def _ml_fallback(p: MLProjection) -> str:
     )
 
 
-def _facts(p: Union[KProjection, HRProjection, MLProjection]) -> str:
+def _tot_fallback(p: TotalProjection) -> str:
+    b = p.extras.get("breakdown", {})
+    return (
+        f"The model expects {p.projected_runs:.1f} runs in {p.matchup} "
+        f"({b.get('exp_home', 0):.1f} home / {b.get('exp_away', 0):.1f} away, "
+        f"park factor {b.get('park_run_factor', 1.0):.2f}, "
+        f"starters {b.get('starter_shift', 0):+.1f}). "
+        f"That clears the {p.book_line} line by {abs(p.edge or 0):.1f}, "
+        f"making the {p.side.lower()} the play."
+    )
+
+
+def _facts(p: Union[KProjection, HRProjection, MLProjection, TotalProjection]) -> str:
     if isinstance(p, KProjection):
         return (
             f"Pick: {p.pitcher_name} ({p.team}) vs {p.opponent} — "
@@ -72,6 +85,14 @@ def _facts(p: Union[KProjection, HRProjection, MLProjection]) -> str:
             f"Adjusted HR/PA: {p.hr_pa_adj:.4f} · Factors: {p.extras}\n"
             f"Confidence: {p.confidence}/10 · {p.conf_reasons}\n"
         )
+    if isinstance(p, TotalProjection):
+        return (
+            f"Pick: {p.matchup} — {p.side} {p.book_line} total runs "
+            f"at {p.book_price if p.book_price else -110:+d}\n"
+            f"Projected total: {p.projected_runs:.2f} (edge {p.edge:+.2f} runs)\n"
+            f"Model breakdown: {p.extras.get('breakdown')}\n"
+            f"Confidence: {p.confidence}/10 · {p.conf_reasons}\n"
+        )
     return (
         f"Pick: {p.extras.get('team_name', p.team)} moneyline "
         f"{'vs' if p.is_home else '@'} {p.opponent} at {p.book_price:+d}\n"
@@ -82,11 +103,13 @@ def _facts(p: Union[KProjection, HRProjection, MLProjection]) -> str:
     )
 
 
-def generate(p: Union[KProjection, HRProjection, MLProjection]) -> str:
+def generate(p: Union[KProjection, HRProjection, MLProjection, TotalProjection]) -> str:
     if isinstance(p, KProjection):
         fallback = _k_fallback(p)
     elif isinstance(p, HRProjection):
         fallback = _hr_fallback(p)
+    elif isinstance(p, TotalProjection):
+        fallback = _tot_fallback(p)
     else:
         fallback = _ml_fallback(p)
     if not ANTHROPIC_API_KEY:

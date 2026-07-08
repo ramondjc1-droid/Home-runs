@@ -282,10 +282,74 @@ def analyze_slate(verbose: bool = True) -> tuple[list, list, list[str]]:
                         domed_park=bool(park.get("dome")), sample_games=sample)
                     ml_projs.append(proj)
 
-    return k_projs, hr_projs, ml_projs, flags
+    # Totals module: expected runs vs the book's O/U line. Reuses the same
+    # standings + odds sweep the moneyline module already fetched.
+    tot_projs = []
+    tot_cfg = f.get("totals", {})
+    if (tot_cfg.get("enabled", True) and odds_api.configured()
+            and ml_cfg.get("enabled", True)):
+        recs, _ = fetch_cached("standings", mlb.standings)
+        ml_odds, _ = fetch_cached("ml_lines_morning", odds_api.moneylines_for_slate)
+        if recs and ml_odds:
+            by_names = {(e["home_team"].lower(), e["away_team"].lower()): e
+                        for e in ml_odds if e.get("home_team") and e.get("away_team")}
+            for g in games:
+                home_rec = recs.get(str(g.home_team_id)) or recs.get(g.home_team_id)
+                away_rec = recs.get(str(g.away_team_id)) or recs.get(g.away_team_id)
+                ev = by_names.get((g.home_team_name.lower(), g.away_team_name.lower()))
+                if not home_rec or not away_rec or not ev or not ev.get("total"):
+                    continue
+                tot = ev["total"]
+                park = _park_info(g.venue)
+                wx = None
+                if not park.get("dome") and weather.configured() and "lat" in park:
+                    wx = weather.game_time_forecast(park["lat"], park["lon"],
+                                                    g.game_date_utc)
+
+                def _kbb(p):
+                    if not p:
+                        return None
+                    prof, _ = fetch_cached(f"pitcher_{p['id']}",
+                                           lambda pid=p["id"]: mlb.pitcher_k_profile(pid))
+                    return (prof or {}).get("kbb_pct")
+
+                runs, breakdown = scoring.project_total_runs(
+                    home_rec=home_rec, away_rec=away_rec,
+                    home_kbb=_kbb(g.home_pitcher), away_kbb=_kbb(g.away_pitcher),
+                    park_run_factor=park.get("run_factor", 1.0),
+                    temp_f=wx["temp_f"] if wx else None)
+
+                proj = scoring.TotalProjection(
+                    home_team=g.home_team, away_team=g.away_team,
+                    game_pk=g.game_pk, projected_runs=round(runs, 2))
+                over = tot.get("over") or [None, None]
+                under = tot.get("under") or [None, None]
+                scoring.apply_total_line(proj, tot["line"], over[1], under[1])
+                if abs(proj.edge or 0) > tot_cfg.get("max_plausible_edge_runs", 3.0):
+                    flags.append(f"{proj.matchup}: implausible totals edge "
+                                 f"({proj.edge:+.1f}) — discarded")
+                    continue
+                proj.extras.update({
+                    "breakdown": breakdown,
+                    "best_book": (over[0] if proj.side == "OVER" else under[0]),
+                    "first_pitch_utc": g.game_date_utc,
+                })
+                rain = bool(wx and wx["precip_chance"] >= 50)
+                if rain:
+                    proj.flags.append(f"{proj.matchup}: {wx['precip_chance']}% rain risk")
+                sample = min(home_rec["w"] + home_rec["l"],
+                             away_rec["w"] + away_rec["l"])
+                confidence.score_total_pick(
+                    proj, both_starters_named=bool(g.home_pitcher and g.away_pitcher),
+                    domed_park=bool(park.get("dome")), sample_games=sample,
+                    rain_risk=rain)
+                tot_projs.append(proj)
+
+    return k_projs, hr_projs, ml_projs, tot_projs, flags
 
 
-def select_picks(k_projs: list, hr_projs: list, ml_projs: list) -> tuple[list, list, list]:
+def select_picks(k_projs: list, hr_projs: list, ml_projs: list,
+                 tot_projs: list) -> tuple[list, list, list, list]:
     f = formula()
     thr = f["thresholds"]
     qualified = [p for p in k_projs
@@ -325,7 +389,15 @@ def select_picks(k_projs: list, hr_projs: list, ml_projs: list) -> tuple[list, l
         ml_picks.append(p)
         if len(ml_picks) >= ml_cfg.get("max_picks_per_day", 2):
             break
-    return k_picks, hr_picks, ml_picks
+
+    tot_cfg = f.get("totals", {})
+    tot_q = [p for p in tot_projs
+             if p.edge is not None
+             and abs(p.edge) >= tot_cfg.get("min_edge_runs", 0.75)
+             and p.confidence >= tot_cfg.get("min_confidence", 6)]
+    tot_q.sort(key=lambda p: (p.confidence, abs(p.edge or 0)), reverse=True)
+    tot_picks = tot_q[:tot_cfg.get("max_picks_per_day", 2)]
+    return k_picks, hr_picks, ml_picks, tot_picks
 
 
 def _persist_k(p) -> int:
@@ -386,24 +458,45 @@ def _persist_ml(p) -> int:
     return pick_id
 
 
+def _persist_tot(p) -> int:
+    pick_id = db.insert_pick({
+        "date": today_et().isoformat(), "pick_type": "TOT",
+        "pitcher_name": p.matchup, "pitcher_id": None,
+        "team": p.home_team, "opponent": p.away_team, "game_pk": p.game_pk,
+        "first_pitch_utc": p.extras.get("first_pitch_utc"),
+        "book_line": p.book_line, "best_book_name": p.extras.get("best_book"),
+        "best_book_price": p.book_price,
+        "my_projection": p.projected_runs, "edge": p.edge,
+        "confidence": p.confidence, "pick_side": p.side,
+        "narrative": p.extras.get("narrative"),
+        "metrics_json": json.dumps(
+            {"conf_reasons": p.conf_reasons, **p.extras}, default=str),
+    })
+    if p.book_line is not None:
+        db.record_line(pick_id, p.book_line, p.book_price)
+    return pick_id
+
+
 def run(dry_run: bool = False, verbose: bool = True) -> list:
     db.init_db()
     started = datetime.now()
 
-    k_projs, hr_projs, ml_projs, flags = analyze_slate(verbose=verbose)
-    if not k_projs and not hr_projs and not ml_projs:
+    k_projs, hr_projs, ml_projs, tot_projs, flags = analyze_slate(verbose=verbose)
+    if not k_projs and not hr_projs and not ml_projs and not tot_projs:
         body = cards.no_slate() if not flags else (
             "⚠️ <b>Morning analysis failed</b> — " + "; ".join(flags))
         print(body) if dry_run else send_message(body)
         return []
 
-    k_picks, hr_picks, ml_picks = select_picks(k_projs, hr_projs, ml_projs)
+    k_picks, hr_picks, ml_picks, tot_picks = select_picks(
+        k_projs, hr_projs, ml_projs, tot_projs)
     if verbose:
         print(f"[scan] {len(k_projs)} pitchers projected, "
-              f"{len(k_picks)} K + {len(hr_picks)} HR + {len(ml_picks)} ML picks qualify")
+              f"{len(k_picks)} K + {len(hr_picks)} HR + {len(ml_picks)} ML "
+              f"+ {len(tot_picks)} TOT picks qualify")
 
     # Narratives (Opus, budget-gated) + card blocks.
-    k_blocks, hr_blocks, ml_blocks = [], [], []
+    k_blocks, hr_blocks, ml_blocks, tot_blocks = [], [], [], []
     for i, p in enumerate(k_picks):
         p.extras["narrative"] = narratives.generate(p)
         k_blocks.append(cards.k_pick_block(i, p, p.extras["narrative"]))
@@ -414,6 +507,10 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
     for i, p in enumerate(ml_picks):
         p.extras["narrative"] = narratives.generate(p)
         ml_blocks.append(cards.ml_pick_block(i, p, p.extras["narrative"]))
+    for i, p in enumerate(tot_picks):
+        p.extras["narrative"] = narratives.generate(p)
+        tot_blocks.append(cards.tot_pick_block(i, p, p.extras["narrative"]))
+        flags.extend(p.flags)
 
     board = None
     if formula().get("moneyline", {}).get("show_board", True):
@@ -421,7 +518,8 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
 
     grade = cards.grade_report()
     card = cards.morning_card(k_blocks, hr_blocks, sorted(set(flags)),
-                              ml_blocks=ml_blocks, ml_board_text=board)
+                              ml_blocks=ml_blocks, ml_board_text=board,
+                              tot_blocks=tot_blocks)
 
     if dry_run:
         print("\n" + "=" * 60)
@@ -430,11 +528,12 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
         print(card)
         print("=" * 60)
         print("\n[dry-run] nothing saved or sent. Re-run without --dry-run to go live.")
-        return k_picks + hr_picks + ml_picks
+        return k_picks + hr_picks + ml_picks + tot_picks
 
     ids = ([_persist_k(p) for p in k_picks]
            + [_persist_hr(p) for p in hr_picks]
-           + [_persist_ml(p) for p in ml_picks])
+           + [_persist_ml(p) for p in ml_picks]
+           + [_persist_tot(p) for p in tot_picks])
     if board:  # so /picks can re-show the board later in the day
         db.kv_set("ml_board", json.dumps(
             {"date": today_et().isoformat(), "text": board}))
@@ -449,7 +548,7 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
     elapsed = (datetime.now() - started).total_seconds()
     if verbose:
         print(f"[scan] done in {elapsed:.0f}s — {len(ids)} picks saved.")
-    return k_picks + hr_picks + ml_picks
+    return k_picks + hr_picks + ml_picks + tot_picks
 
 
 def main(argv=None) -> int:

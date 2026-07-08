@@ -161,34 +161,63 @@ def best_price_for(rec: dict, side: str) -> tuple[Optional[str], Optional[int]]:
 
 
 def moneylines_for_slate() -> list[dict]:
-    """Best h2h price per team for every game — one request for the slate.
+    """Best h2h price per team AND the totals market — one request per slate.
 
     [{home_team, away_team, commence_time,
-      best: {team_full_name: [book, price]}}]
+      best: {team_full_name: [book, price]},
+      total: {line, over: [book, price], under: [book, price]} | None}]
     """
     data = _get(f"sports/{SPORT}/odds", {
-        "regions": "us", "markets": "h2h", "oddsFormat": "american",
+        "regions": "us", "markets": "h2h,totals", "oddsFormat": "american",
     }) or []
     out = []
     for ev in data:
         if not _on_slate(ev):
             continue
         best: dict[str, tuple] = {}
+        tot_rows = []  # (line, over_price, under_price, book) per bookmaker
         for bm in ev.get("bookmakers", []):
             for market in bm.get("markets", []):
-                if market.get("key") != "h2h":
-                    continue
-                for oc in market.get("outcomes", []):
-                    name, price = oc.get("name"), oc.get("price")
-                    if not name or price is None:
-                        continue
-                    price = int(price)
-                    if name not in best or price > best[name][1]:
-                        best[name] = (bm.get("title", bm.get("key")), price)
+                if market.get("key") == "h2h":
+                    for oc in market.get("outcomes", []):
+                        name, price = oc.get("name"), oc.get("price")
+                        if not name or price is None:
+                            continue
+                        price = int(price)
+                        if name not in best or price > best[name][1]:
+                            best[name] = (bm.get("title", bm.get("key")), price)
+                elif market.get("key") == "totals":
+                    row = {"book": bm.get("title", bm.get("key"))}
+                    for oc in market.get("outcomes", []):
+                        if oc.get("point") is not None:
+                            row["line"] = float(oc["point"])
+                        side = (oc.get("name") or "").lower()
+                        if side == "over" and oc.get("price") is not None:
+                            row["over"] = int(oc["price"])
+                        elif side == "under" and oc.get("price") is not None:
+                            row["under"] = int(oc["price"])
+                    if "line" in row:
+                        tot_rows.append(row)
+
+        total = None
+        if tot_rows:
+            lines = sorted(r["line"] for r in tot_rows)
+            consensus = lines[len(lines) // 2]
+            at_line = [r for r in tot_rows if r["line"] == consensus]
+            def _best(key):
+                priced = [r for r in at_line if key in r]
+                if not priced:
+                    return None
+                r = max(priced, key=lambda r: r[key])
+                return [r["book"], r[key]]
+            total = {"line": consensus, "over": _best("over"),
+                     "under": _best("under")}
+
         out.append({
             "home_team": ev.get("home_team"), "away_team": ev.get("away_team"),
             "commence_time": ev.get("commence_time"),
             "best": {k: list(v) for k, v in best.items()},
+            "total": total,
         })
     return out
 

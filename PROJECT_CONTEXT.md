@@ -39,6 +39,16 @@ HR/PA_adj     = blended × ParkHRF × PitcherHRF(clamped 0.8-1.25) × TempF
 P(HR)         = 1 − (1 − HR/PA_adj)^4.1
 Edge          = P(HR) − implied_prob(best Yes price)
 
+Totals module (O/U runs):
+side_exp      = own RS/gm × opp RA/gm ÷ league (each regressed 20% to 4.4)
+total         = (home_exp + away_exp) × park_run_factor
+                − Σ starter (K-BB% − .145) × 6 (cap ±0.8 each)
+                + (temp−70)/10 × 0.3 outdoor
+Edge          = total − consensus book line; ≥0.75 runs qualifies, max 2/day.
+Graded from the final linescore (pushes on exact whole-number lines);
+rain risk ≥50% costs −2 confidence. pick_type 'TOT', actual runs stored
+in actual_ks.
+
 Moneyline module:
 strength      = Pythagorean(RS, RA, 1.83), regressed 20% to .500 (standings API)
 P(home win)   = log5(home, away) + 0.035 HFA + starter K-BB% gap × 0.5 (cap ±0.08)

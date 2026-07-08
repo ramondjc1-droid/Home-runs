@@ -197,6 +197,15 @@ def standings(season: Optional[int] = None) -> Optional[dict]:
     return out or None
 
 
+def final_total_runs(game_pk: int) -> Optional[int]:
+    """Combined runs for a final game, else None."""
+    data = _get(f"game/{game_pk}/linescore")
+    try:
+        return int(data["teams"]["home"]["runs"]) + int(data["teams"]["away"]["runs"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def game_winner(game_pk: int) -> Optional[int]:
     """Winning team_id for a final game, else None."""
     sched = _get("schedule", {"sportId": 1, "gamePk": game_pk})
