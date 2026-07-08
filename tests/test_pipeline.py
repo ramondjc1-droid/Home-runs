@@ -243,6 +243,28 @@ def test_dispatch_schedule_matches_workflow():
     assert crons == set(dispatch.SCHEDULE_MAP.keys())
 
 
+def test_ml_board_renders():
+    import cards
+    from model import scoring
+    projs = []
+    for pk, team, opp, prob, price, home in (
+        (1, "MIL", "STL", 0.65, -123, False),
+        (2, "MIA", "SEA", 0.52, +118, True),
+        (3, "NYY", "TB", 0.55, -160, True),   # negative edge, still listed
+    ):
+        p = scoring.MLProjection(team=team, team_id=pk, opponent=opp,
+                                 game_pk=pk, win_prob=prob, is_home=home)
+        scoring.apply_ml_price(p, price)
+        projs.append(p)
+    board = cards.ml_board(projs, picked_pks={1})
+    assert board is not None
+    lines = board.split("\n")
+    assert lines[2].startswith("🎯 ")            # picked game first (best edge)
+    assert "MIL" in lines[2] and "65%" in lines[2]
+    assert sum("@" in ln for ln in lines) == 3   # one row per game
+    assert cards.ml_board([], set()) is None
+
+
 def test_cards_render():
     import cards
     from model import scoring

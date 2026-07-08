@@ -68,6 +68,7 @@ moneyline:
   min_edge_prob: 0.04            # model win% must beat implied by 4 points
   min_confidence: 6
   max_picks_per_day: 2
+  show_board: true               # full-slate model-vs-market board on the card
 
 # ---------------------------------------------------------------------------
 # Park factors. k_factor / hr_factor are multiplicative (1.0 = neutral).

@@ -405,9 +405,13 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
         p.extras["narrative"] = narratives.generate(p)
         ml_blocks.append(cards.ml_pick_block(i, p, p.extras["narrative"]))
 
+    board = None
+    if formula().get("moneyline", {}).get("show_board", True):
+        board = cards.ml_board(ml_projs, {p.game_pk for p in ml_picks})
+
     grade = cards.grade_report()
     card = cards.morning_card(k_blocks, hr_blocks, sorted(set(flags)),
-                              ml_blocks=ml_blocks)
+                              ml_blocks=ml_blocks, ml_board_text=board)
 
     if dry_run:
         print("\n" + "=" * 60)
@@ -421,6 +425,9 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
     ids = ([_persist_k(p) for p in k_picks]
            + [_persist_hr(p) for p in hr_picks]
            + [_persist_ml(p) for p in ml_picks])
+    if board:  # so /picks can re-show the board later in the day
+        db.kv_set("ml_board", json.dumps(
+            {"date": date.today().isoformat(), "text": board}))
     ok = True
     if grade:
         ok = send_message(grade)

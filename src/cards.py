@@ -82,9 +82,37 @@ def ml_pick_block(i: int, p: MLProjection, narrative: str) -> str:
     return "\n".join(lines)
 
 
+def ml_board(projs: list[MLProjection], picked_pks: set[int]) -> Optional[str]:
+    """One line per game: the model's value side vs the market, best edge first.
+
+    🎯 marks sides that made the actual pick card; everything else is
+    informational — small or negative edges are shown, not recommended.
+    """
+    by_game: dict[int, MLProjection] = {}
+    for p in projs:
+        if p.edge is None:
+            continue
+        cur = by_game.get(p.game_pk)
+        if cur is None or p.edge > (cur.edge or -1.0):
+            by_game[p.game_pk] = p
+    if not by_game:
+        return None
+    rows = sorted(by_game.values(), key=lambda p: p.edge, reverse=True)
+    lines = ["🎲 <b>ML BOARD</b> — model vs market, value side per game", ""]
+    for p in rows:
+        matchup = (f"{p.opponent} @ {p.team}" if p.is_home
+                   else f"{p.team} @ {p.opponent}")
+        mark = "🎯 " if p.game_pk in picked_pks else ""
+        lines.append(
+            f"{mark}{matchup}: <b>{p.team}</b> {p.win_prob:.0%} "
+            f"vs {p.implied_prob:.0%} imp ({(p.edge or 0) * 100:+.1f})")
+    return "\n".join(lines)
+
+
 def morning_card(k_blocks: list[str], hr_blocks: list[str],
                  flags: list[str], d: Optional[str] = None,
-                 ml_blocks: Optional[list[str]] = None) -> str:
+                 ml_blocks: Optional[list[str]] = None,
+                 ml_board_text: Optional[str] = None) -> str:
     d = d or date.today().isoformat()
     parts = [f"⚾ <b>MLB K PICKS — {d}</b>", "", scoreboard(), "", RULE, ""]
     if k_blocks:
@@ -98,6 +126,8 @@ def morning_card(k_blocks: list[str], hr_blocks: list[str],
     if ml_blocks:
         parts += ["", RULE, "", "🎲 <b>MONEYLINE VALUE</b>", ""]
         parts.append("\n\n".join(ml_blocks))
+    if ml_board_text:
+        parts += ["", RULE, "", ml_board_text]
     parts += ["", RULE, ""]
     parts.append("⚠️ Flags: " + ("; ".join(flags) if flags else "none"))
     parts.append("🕒 Lines will refresh at 2 PM ET")

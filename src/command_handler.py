@@ -58,6 +58,12 @@ def cmd_picks() -> str:
         out.append(_fmt_pick(p))
         if p["narrative"]:
             out.append(f"   <i>{p['narrative']}</i>")
+    try:
+        board = json.loads(db.kv_get("ml_board", "{}"))
+        if board.get("date") == date.today().isoformat():
+            out += ["", board["text"]]
+    except (json.JSONDecodeError, KeyError):
+        pass
     return "\n".join(out)
 
 
