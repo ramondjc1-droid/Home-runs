@@ -48,7 +48,7 @@ homerun:
   min_edge_prob: 0.04            # model P(HR) must beat implied prob by this
   max_plausible_edge: 0.15       # bigger "edges" are data errors — skip + flag
   min_confidence: 6
-  max_picks_per_day: 2
+  max_picks_per_day: 6           # owner request 2026-07-08: 5-6 HR callouts/day
   # temperature/wind effect on carry: multiplier per +10F above 70F, and per
   # 10 mph of wind (sign decided by park orientation is unknowable cheaply, so
   # wind only *reduces* confidence, never boosts the projection).
