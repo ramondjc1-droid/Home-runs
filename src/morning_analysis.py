@@ -18,7 +18,7 @@ from datetime import date, datetime
 import cards
 import db
 import narratives
-from config import formula
+from config import formula, today_et
 from fetchers import fetch_cached, log_error
 from fetchers import mlb_stats_api as mlb
 from fetchers import odds_api, savant, umpscorecards, weather
@@ -209,6 +209,11 @@ def analyze_slate(verbose: bool = True) -> tuple[list, list, list[str]]:
                         if price:
                             scoring.apply_hr_price(hp, price)
                             hp.extras["best_book"] = odds_api.best_price_for(rec, "OVER")[0]
+                    # An "edge" this big is a stale/in-play price, not value.
+                    if (hp.edge or 0) > hr_cfg.get("max_plausible_edge", 0.15):
+                        flags.append(f"{batter['name']}: implausible HR edge "
+                                     f"({hp.edge:+.2f}) — price discarded")
+                        hp.edge = hp.implied_prob = hp.book_price = None
                     confidence.score_hr_pick(
                         hp, domed_park=bool(park.get("dome")),
                         injury_flags=False, pa_season=bprof["pa_season"])
@@ -264,6 +269,11 @@ def analyze_slate(verbose: bool = True) -> tuple[list, list, list[str]]:
                         team=team_abbr, team_id=team_id, opponent=opp_abbr,
                         game_pk=g.game_pk, win_prob=round(prob, 4), is_home=is_home)
                     scoring.apply_ml_price(proj, price)
+                    # An "edge" this big is a stale/in-play price, not value.
+                    if (proj.edge or 0) > ml_cfg.get("max_plausible_edge", 0.20):
+                        flags.append(f"{team_abbr} ML: implausible edge "
+                                     f"({proj.edge:+.2f}) — price discarded")
+                        continue
                     proj.extras.update({"best_book": book, "breakdown": breakdown,
                                         "first_pitch_utc": g.game_date_utc,
                                         "team_name": team_name})
@@ -320,7 +330,7 @@ def select_picks(k_projs: list, hr_projs: list, ml_projs: list) -> tuple[list, l
 
 def _persist_k(p) -> int:
     pick_id = db.insert_pick({
-        "date": date.today().isoformat(), "pick_type": "K",
+        "date": today_et().isoformat(), "pick_type": "K",
         "pitcher_name": p.pitcher_name, "pitcher_id": p.pitcher_id,
         "team": p.team, "opponent": p.opponent, "game_pk": p.game_pk,
         "first_pitch_utc": p.extras.get("first_pitch_utc"),
@@ -343,7 +353,7 @@ def _persist_k(p) -> int:
 
 def _persist_hr(p) -> int:
     pick_id = db.insert_pick({
-        "date": date.today().isoformat(), "pick_type": "HR",
+        "date": today_et().isoformat(), "pick_type": "HR",
         "pitcher_name": p.batter_name, "pitcher_id": p.batter_id,
         "team": p.team, "opponent": p.opponent, "game_pk": p.game_pk,
         "first_pitch_utc": p.extras.get("first_pitch_utc"),
@@ -361,7 +371,7 @@ def _persist_hr(p) -> int:
 
 def _persist_ml(p) -> int:
     pick_id = db.insert_pick({
-        "date": date.today().isoformat(), "pick_type": "ML",
+        "date": today_et().isoformat(), "pick_type": "ML",
         "pitcher_name": p.extras.get("team_name", p.team), "pitcher_id": p.team_id,
         "team": p.team, "opponent": p.opponent, "game_pk": p.game_pk,
         "first_pitch_utc": p.extras.get("first_pitch_utc"),
@@ -427,7 +437,7 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
            + [_persist_ml(p) for p in ml_picks])
     if board:  # so /picks can re-show the board later in the day
         db.kv_set("ml_board", json.dumps(
-            {"date": date.today().isoformat(), "text": board}))
+            {"date": today_et().isoformat(), "text": board}))
     ok = True
     if grade:
         ok = send_message(grade)

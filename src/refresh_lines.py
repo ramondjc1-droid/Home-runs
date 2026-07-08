@@ -9,7 +9,7 @@ import sys
 from datetime import date
 
 import db
-from config import formula
+from config import formula, today_et
 from fetchers import odds_api
 from telegram_bot import send_message
 
@@ -21,7 +21,7 @@ def check_lines(stage: str, only_pregame: bool = False,
         print("[lines] ODDS_API_KEY not set — skipping.")
         return []
 
-    picks = [p for p in db.picks_for_date(date.today().isoformat())
+    picks = [p for p in db.picks_for_date(today_et().isoformat())
              if p["result"] == "PENDING" and p["book_line"] is not None]
     if only_pregame:
         picks = [p for p in picks if not p["pregame_checked"]]

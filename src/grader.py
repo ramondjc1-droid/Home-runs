@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 from datetime import date, timedelta
+from config import today_et
 from typing import Optional
 
 import cards
@@ -62,7 +63,7 @@ def grade_pick(p) -> tuple[str, Optional[int]]:
 
 def run(notify: bool = False, dry_run: bool = False) -> None:
     db.init_db()
-    today = date.today().isoformat()
+    today = today_et().isoformat()
     pending = db.pending_picks(before_date=today)
     if not pending:
         print("[grader] nothing pending.")
@@ -97,7 +98,7 @@ def run(notify: bool = False, dry_run: bool = False) -> None:
         print(f"[grader] {d}: {hits}-{misses}-{pushes} ({units:+.2f}u)")
 
     if notify and graded_dates:
-        report = cards.grade_report((date.today() - timedelta(days=1)).isoformat())
+        report = cards.grade_report((today_et() - timedelta(days=1)).isoformat())
         if report:
             print(report) if dry_run else send_message(report)
 

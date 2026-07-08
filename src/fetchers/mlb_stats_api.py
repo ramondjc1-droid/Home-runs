@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Optional
 
+from config import today_et
 from fetchers import get_with_retry, log_error
 
 BASE = "https://statsapi.mlb.com/api/v1"
@@ -41,7 +42,7 @@ def _get(path: str, params: Optional[dict] = None) -> Optional[dict]:
 
 def todays_slate(d: Optional[str] = None) -> list[Game]:
     """All games for a date with probable pitchers and venues."""
-    d = d or date.today().isoformat()
+    d = d or today_et().isoformat()
     data = _get("schedule", {
         "sportId": 1, "date": d,
         "hydrate": "probablePitcher,team,venue",
@@ -90,7 +91,7 @@ def _ip_to_float(ip: str | float) -> float:
 
 
 def pitcher_season_stats(pid: int, season: Optional[int] = None) -> Optional[dict]:
-    season = season or date.today().year
+    season = season or today_et().year
     data = _get(f"people/{pid}/stats",
                 {"stats": "season", "group": "pitching", "season": season})
     try:
@@ -100,7 +101,7 @@ def pitcher_season_stats(pid: int, season: Optional[int] = None) -> Optional[dic
 
 
 def pitcher_game_log(pid: int, season: Optional[int] = None) -> list[dict]:
-    season = season or date.today().year
+    season = season or today_et().year
     data = _get(f"people/{pid}/stats",
                 {"stats": "gameLog", "group": "pitching", "season": season})
     try:
@@ -126,7 +127,7 @@ def pitcher_k_profile(pid: int, season: Optional[int] = None) -> Optional[dict]:
         return None
 
     logs = pitcher_game_log(pid, season)
-    cutoff = (date.today() - timedelta(days=30)).isoformat()
+    cutoff = (today_et() - timedelta(days=30)).isoformat()
     so30 = bf30 = 0
     recent_ips: list[float] = []
     for split in reversed(logs):  # newest last in API order; walk newest-first
@@ -157,9 +158,9 @@ def pitcher_k_profile(pid: int, season: Optional[int] = None) -> Optional[dict]:
 def team_k_pct_recent(team_id: int, days: int = 15,
                       season: Optional[int] = None) -> Optional[float]:
     """Team strikeout rate over the last ~N calendar days (≈ last 15 games)."""
-    season = season or date.today().year
-    start = (date.today() - timedelta(days=days)).isoformat()
-    end = date.today().isoformat()
+    season = season or today_et().year
+    start = (today_et() - timedelta(days=days)).isoformat()
+    end = today_et().isoformat()
     data = _get(f"teams/{team_id}/stats", {
         "stats": "byDateRange", "group": "hitting", "season": season,
         "startDate": start, "endDate": end,
@@ -177,7 +178,7 @@ def team_k_pct_recent(team_id: int, days: int = 15,
 
 def standings(season: Optional[int] = None) -> Optional[dict]:
     """{team_id: {w, l, rs, ra}} from the regular-season standings."""
-    season = season or date.today().year
+    season = season or today_et().year
     data = _get("standings", {
         "leagueId": "103,104", "season": season,
         "standingsTypes": "regularSeason",
@@ -214,7 +215,7 @@ def game_winner(game_pk: int) -> Optional[int]:
 
 def team_hr_leaders(team_id: int, season: Optional[int] = None,
                     limit: int = 5) -> list[dict]:
-    season = season or date.today().year
+    season = season or today_et().year
     data = _get(f"teams/{team_id}/leaders", {
         "leaderCategories": "homeRuns", "season": season, "limit": limit,
     })
@@ -231,7 +232,7 @@ def team_hr_leaders(team_id: int, season: Optional[int] = None,
 
 def batter_hr_profile(pid: int, season: Optional[int] = None) -> Optional[dict]:
     """{hr_pa_season, hr_pa_30d, pa_season} for one batter."""
-    season = season or date.today().year
+    season = season or today_et().year
     data = _get(f"people/{pid}/stats",
                 {"stats": "season", "group": "hitting", "season": season})
     try:
@@ -243,10 +244,10 @@ def batter_hr_profile(pid: int, season: Optional[int] = None) -> Optional[dict]:
     if pa == 0:
         return None
 
-    start = (date.today() - timedelta(days=30)).isoformat()
+    start = (today_et() - timedelta(days=30)).isoformat()
     recent = _get(f"people/{pid}/stats", {
         "stats": "byDateRange", "group": "hitting", "season": season,
-        "startDate": start, "endDate": date.today().isoformat(),
+        "startDate": start, "endDate": today_et().isoformat(),
     })
     hr_pa_30 = None
     try:

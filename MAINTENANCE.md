@@ -12,6 +12,15 @@ refreshing. Newest entries first.
 
 ## Log
 
+### 2026-07-08 — in-play price leakage + UTC date bug (caught in dry run)
+An evening dry run produced absurd "edges" (+33 pt HR at +16000, +37 pt ML at
++1150): the UTC runner clock had rolled past midnight (targeting tomorrow's
+slate) while The Odds API returned live in-game prices for tonight's games.
+Fixes: (1) all slate dates now use today_et() (America/New_York) instead of
+date.today(); (2) odds fetchers drop events whose commence_time has passed —
+in-play prices never enter the model; (3) sanity gates discard any HR edge
+> 0.15 or ML edge > 0.20 as a data error, with a flag on the card.
+
 ### 2026-07-07 — HR model calibration before first live run
 First live-slate dry run showed HR probability edges of +12 to +14 points —
 implausibly large. Tightened the pitcher HR factor clamp from [0.6, 1.6] to

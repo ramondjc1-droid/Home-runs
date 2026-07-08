@@ -46,6 +46,7 @@ homerun:
   min_pa_season: 100             # skip small-sample bats
   candidates_per_team: 5         # team HR leaders considered per game
   min_edge_prob: 0.04            # model P(HR) must beat implied prob by this
+  max_plausible_edge: 0.15       # bigger "edges" are data errors — skip + flag
   min_confidence: 6
   max_picks_per_day: 2
   # temperature/wind effect on carry: multiplier per +10F above 70F, and per
@@ -66,6 +67,7 @@ moneyline:
   starter_kbb_weight: 0.5        # win-prob shift per point of starter K-BB% gap
   max_starter_shift: 0.08        # cap on the starter adjustment
   min_edge_prob: 0.04            # model win% must beat implied by 4 points
+  max_plausible_edge: 0.20       # bigger "edges" are data errors — skip + flag
   min_confidence: 6
   max_picks_per_day: 2
   show_board: true               # full-slate model-vs-market board on the card

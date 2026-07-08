@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from datetime import date, datetime, timedelta, timezone
+from config import today_et
 
 import db
 from fetchers import umpscorecards
@@ -32,7 +33,7 @@ def _due(p) -> bool:
 
 def run(dry_run: bool = False) -> None:
     db.init_db()
-    pending = [p for p in db.picks_for_date(date.today().isoformat())
+    pending = [p for p in db.picks_for_date(today_et().isoformat())
                if p["result"] == "PENDING" and not p["pregame_checked"]]
     due = [p for p in pending if _due(p)]
     if not due:

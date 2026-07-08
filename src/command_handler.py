@@ -18,7 +18,7 @@ import costs
 import db
 import telegram_bot as tg
 from config import (ANTHROPIC_API_KEY, CHAT_MODEL, FORMULA_PATH, formula,
-                    reload_formula)
+                    reload_formula, today_et)
 
 HELP = """<b>MLB K Analyst — commands</b>
 /picks — today's pick card
@@ -53,14 +53,14 @@ def cmd_picks() -> str:
     picks = db.picks_for_date()
     if not picks:
         return "No picks recorded today (morning run may not have fired yet)."
-    out = [f"⚾ <b>Today's picks — {date.today().isoformat()}</b>", ""]
+    out = [f"⚾ <b>Today's picks — {today_et().isoformat()}</b>", ""]
     for p in picks:
         out.append(_fmt_pick(p))
         if p["narrative"]:
             out.append(f"   <i>{p['narrative']}</i>")
     try:
         board = json.loads(db.kv_get("ml_board", "{}"))
-        if board.get("date") == date.today().isoformat():
+        if board.get("date") == today_et().isoformat():
             out += ["", board["text"]]
     except (json.JSONDecodeError, KeyError):
         pass
@@ -92,7 +92,7 @@ def cmd_grade() -> str:
 
 
 def _perf(days: int, label: str) -> str:
-    since = (date.today() - timedelta(days=days)).isoformat()
+    since = (today_et() - timedelta(days=days)).isoformat()
     perf = db.performance_since(since)
     if not perf["n"]:
         return f"No graded picks in the last {label}."
@@ -171,7 +171,7 @@ def answer_freeform(question: str) -> str:
         return "Free-text Q&A needs ANTHROPIC_API_KEY. Try /picks or /status."
     recent = []
     for d_off in range(0, 7):
-        d = (date.today() - timedelta(days=d_off)).isoformat()
+        d = (today_et() - timedelta(days=d_off)).isoformat()
         for p in db.picks_for_date(d):
             recent.append({k: p[k] for k in p.keys()
                            if k not in ("narrative", "metrics_json")})
@@ -217,7 +217,7 @@ def handle(text: str) -> str:
     if low.startswith("/week"):
         return _perf(7, "7 days")
     if low.startswith("/month"):
-        return _perf(date.today().day, "month")
+        return _perf(today_et().day, "month")
     if low.startswith("/history"):
         return cmd_history(text[len("/history"):].strip())
     if low.startswith("/tune"):

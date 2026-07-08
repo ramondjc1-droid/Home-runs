@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Iterator, Optional
 
-from config import DB_PATH
+from config import DB_PATH, today_et
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS picks (
@@ -136,7 +136,7 @@ def mark_sent(pick_id: int) -> None:
 
 
 def picks_for_date(d: Optional[str] = None) -> list[sqlite3.Row]:
-    d = d or date.today().isoformat()
+    d = d or today_et().isoformat()
     with connect() as conn:
         return conn.execute(
             "SELECT * FROM picks WHERE date = ? ORDER BY confidence DESC, ABS(edge) DESC",
@@ -238,7 +238,7 @@ def performance_since(since_iso: str) -> dict:
 
 
 def season_performance() -> dict:
-    year = date.today().year
+    year = today_et().year
     return performance_since(f"{year}-01-01")
 
 
@@ -256,26 +256,26 @@ def log_formula_change(parameter: str, old: str, new: str, reason: str) -> None:
 def add_skip(label: str) -> None:
     with connect() as conn:
         conn.execute("INSERT INTO skips (label, skip_date) VALUES (?, ?)",
-                     (label.upper(), date.today().isoformat()))
+                     (label.upper(), today_et().isoformat()))
 
 
 def skips_for_today() -> set[str]:
     with connect() as conn:
         rows = conn.execute("SELECT label FROM skips WHERE skip_date = ?",
-                            (date.today().isoformat(),)).fetchall()
+                            (today_et().isoformat(),)).fetchall()
     return {r["label"] for r in rows}
 
 
 def add_force(player: str) -> None:
     with connect() as conn:
         conn.execute("INSERT INTO force_adds (player_name, add_date) VALUES (?, ?)",
-                     (player, date.today().isoformat()))
+                     (player, today_et().isoformat()))
 
 
 def force_adds_for_today() -> set[str]:
     with connect() as conn:
         rows = conn.execute("SELECT player_name FROM force_adds WHERE add_date = ?",
-                            (date.today().isoformat(),)).fetchall()
+                            (today_et().isoformat(),)).fetchall()
     return {r["player_name"] for r in rows}
 
 
@@ -285,7 +285,7 @@ def already_ran_today(stage: str) -> bool:
     with connect() as conn:
         row = conn.execute(
             "SELECT 1 FROM run_log WHERE stage = ? AND run_date = ? LIMIT 1",
-            (stage, date.today().isoformat()),
+            (stage, today_et().isoformat()),
         ).fetchone()
     return row is not None
 
@@ -294,7 +294,7 @@ def log_run(stage: str) -> None:
     with connect() as conn:
         conn.execute(
             "INSERT INTO run_log (stage, run_date, created_at) VALUES (?,?,?)",
-            (stage, date.today().isoformat(), datetime.utcnow().isoformat()),
+            (stage, today_et().isoformat(), datetime.utcnow().isoformat()),
         )
 
 
@@ -318,7 +318,7 @@ def record_cost(model: str, input_tokens: int, output_tokens: int, usd: float) -
 
 
 def month_spend() -> float:
-    start = date.today().replace(day=1).isoformat()
+    start = today_et().replace(day=1).isoformat()
     with connect() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(usd), 0) s FROM api_costs WHERE ts >= ?", (start,)

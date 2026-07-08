@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from config import today_et
 from typing import Optional
 
 import db
@@ -22,7 +23,7 @@ def _record_line(perf: dict) -> str:
 
 
 def scoreboard() -> str:
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    yesterday = (today_et() - timedelta(days=1)).isoformat()
     y = db.summary_for(yesterday)
     season = db.season_performance()
     y_part = (f"{y['hits']}-{y['misses']} ({_fmt_units(y['units_pnl'])})"
@@ -113,7 +114,7 @@ def morning_card(k_blocks: list[str], hr_blocks: list[str],
                  flags: list[str], d: Optional[str] = None,
                  ml_blocks: Optional[list[str]] = None,
                  ml_board_text: Optional[str] = None) -> str:
-    d = d or date.today().isoformat()
+    d = d or today_et().isoformat()
     parts = [f"⚾ <b>MLB K PICKS — {d}</b>", "", scoreboard(), "", RULE, ""]
     if k_blocks:
         parts.append("\n\n".join(k_blocks))
@@ -138,7 +139,7 @@ def morning_card(k_blocks: list[str], hr_blocks: list[str],
 
 def grade_report(d: Optional[str] = None) -> Optional[str]:
     """Yesterday's results block, or None when nothing was graded."""
-    d = d or (date.today() - timedelta(days=1)).isoformat()
+    d = d or (today_et() - timedelta(days=1)).isoformat()
     picks = [p for p in db.picks_for_date(d) if p["result"] != "PENDING"]
     if not picks:
         return None
@@ -171,5 +172,5 @@ def grade_report(d: Optional[str] = None) -> Optional[str]:
 
 
 def no_slate() -> str:
-    return (f"⚾ <b>MLB K PICKS — {date.today().isoformat()}</b>\n\n"
+    return (f"⚾ <b>MLB K PICKS — {today_et().isoformat()}</b>\n\n"
             "No MLB games today — nothing to analyze. See you next slate.")

@@ -8,6 +8,7 @@ quota (x-requests-remaining header) is stored in the kv table for /status.
 from __future__ import annotations
 
 import unicodedata
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -48,9 +49,24 @@ def _get(path: str, params: dict) -> Optional[list | dict]:
         return None
 
 
+def _not_started(ev: dict) -> bool:
+    """True when the event hasn't begun — in-play prices are garbage for a
+    pregame model (a mid-blowout ML or a benched batter's HR price would
+    otherwise masquerade as a huge edge)."""
+    ct = ev.get("commence_time")
+    if not ct:
+        return False
+    try:
+        start = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return start > datetime.now(timezone.utc)
+
+
 def events() -> list[dict]:
-    """Upcoming/live MLB events: [{id, commence_time, home_team, away_team}]."""
-    return _get(f"sports/{SPORT}/events", {}) or []
+    """Upcoming (pregame only) MLB events."""
+    evs = _get(f"sports/{SPORT}/events", {}) or []
+    return [e for e in evs if _not_started(e)]
 
 
 def event_props(event_id: str, market: str) -> Optional[dict]:
@@ -150,6 +166,8 @@ def moneylines_for_slate() -> list[dict]:
     }) or []
     out = []
     for ev in data:
+        if not _not_started(ev):
+            continue
         best: dict[str, tuple] = {}
         for bm in ev.get("bookmakers", []):
             for market in bm.get("markets", []):

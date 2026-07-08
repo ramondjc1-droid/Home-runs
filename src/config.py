@@ -2,11 +2,21 @@
 from __future__ import annotations
 
 import os
+from datetime import date, datetime
 from functools import lru_cache
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import load_dotenv
+
+ET = ZoneInfo("America/New_York")
+
+
+def today_et() -> date:
+    """The MLB slate date. Runners are on UTC, where the calendar flips at
+    8 PM ET — date.today() would target tomorrow's slate all evening."""
+    return datetime.now(ET).date()
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
