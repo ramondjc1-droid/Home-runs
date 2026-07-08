@@ -14,7 +14,7 @@ from typing import Optional
 import requests
 
 import db
-from config import ODDS_API_KEY
+from config import ET, ODDS_API_KEY, today_et
 from fetchers import log_error
 
 BASE = "https://api.the-odds-api.com/v4"
@@ -49,10 +49,13 @@ def _get(path: str, params: dict) -> Optional[list | dict]:
         return None
 
 
-def _not_started(ev: dict) -> bool:
-    """True when the event hasn't begun — in-play prices are garbage for a
-    pregame model (a mid-blowout ML or a benched batter's HR price would
-    otherwise masquerade as a huge edge)."""
+def _on_slate(ev: dict) -> bool:
+    """True when the event is pregame AND starts on today's ET slate date.
+
+    Both halves matter: in-play prices are garbage for a pregame model, and
+    teams play the same opponent on consecutive days, so without the date
+    check tonight's matchup can silently match tomorrow's event.
+    """
     ct = ev.get("commence_time")
     if not ct:
         return False
@@ -60,13 +63,15 @@ def _not_started(ev: dict) -> bool:
         start = datetime.fromisoformat(ct.replace("Z", "+00:00"))
     except ValueError:
         return False
-    return start > datetime.now(timezone.utc)
+    if start <= datetime.now(timezone.utc):
+        return False
+    return start.astimezone(ET).date() == today_et()
 
 
 def events() -> list[dict]:
-    """Upcoming (pregame only) MLB events."""
+    """Pregame MLB events on today's ET slate."""
     evs = _get(f"sports/{SPORT}/events", {}) or []
-    return [e for e in evs if _not_started(e)]
+    return [e for e in evs if _on_slate(e)]
 
 
 def event_props(event_id: str, market: str) -> Optional[dict]:
@@ -166,7 +171,7 @@ def moneylines_for_slate() -> list[dict]:
     }) or []
     out = []
     for ev in data:
-        if not _not_started(ev):
+        if not _on_slate(ev):
             continue
         best: dict[str, tuple] = {}
         for bm in ev.get("bookmakers", []):
