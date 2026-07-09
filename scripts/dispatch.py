@@ -32,10 +32,10 @@ except Exception:  # pragma: no cover
 
 # Cron line (must match .github/workflows/daily.yml exactly) -> stage script.
 SCHEDULE_MAP = {
-    "0 6,7 * * *": "grader.py",             # 2:00 AM ET
-    "0 14,15 * * *": "morning_analysis.py", # 10:00 AM ET
-    "0 18,19 * * *": "refresh_lines.py",    # 2:00 PM ET
-    "0 17,20-23,0-3 * * *": "pregame_check.py",  # hourly game window
+    "23 6,7,8 * * *": "grader.py",             # 2:23 AM ET + catch-ups
+    "47 13,14,15 * * *": "morning_analysis.py",  # ~9:47 AM ET + catch-ups
+    "17 18,19,20 * * *": "refresh_lines.py",   # ~2:17 PM ET + catch-ups
+    "37 17,20-23,0-3 * * *": "pregame_check.py",  # hourly game window
 }
 
 ALIAS = {
