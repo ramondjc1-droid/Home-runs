@@ -481,6 +481,16 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
     db.init_db()
     started = datetime.now()
 
+    # Self-heal: if the overnight grader was delayed or dropped by the
+    # scheduler, grade yesterday's pending picks now so the card always
+    # leads with real results.
+    if not dry_run:
+        try:
+            import grader
+            grader.run(notify=False)
+        except Exception as exc:
+            log_error("morning_analysis", f"pre-grade failed: {exc}")
+
     k_projs, hr_projs, ml_projs, tot_projs, flags = analyze_slate(verbose=verbose)
     if not k_projs and not hr_projs and not ml_projs and not tot_projs:
         body = cards.no_slate() if not flags else (
