@@ -21,6 +21,9 @@ on:
     - cron: "47 13,14,15 * * *"     # morning_analysis (~9:47 AM ET + catch-ups)
     - cron: "17 18,19,20 * * *"     # refresh_lines (~2:17 PM ET + catch-ups)
     - cron: "37 17,20-23,0-3 * * *" # pregame_check (hourly game window)
+  push:
+    paths:
+      - ".trigger"                  # commit a stage name to .trigger to force a run
   workflow_dispatch:
     inputs:
       stage:
@@ -68,11 +71,23 @@ jobs:
           restore-keys: |
             picks-db-
 
+      # Push-based trigger: the stage name lives in the committed .trigger
+      # file. This path needs only git push access, so delivery can be forced
+      # even when API/UI dispatch is unavailable.
+      - name: Resolve stage
+        id: stage
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [ -s .trigger ]; then
+            echo "stage=$(head -1 .trigger | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+          else
+            echo "stage=${{ github.event.inputs.stage }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run stage
         run: >
           python scripts/dispatch.py
           --schedule "${{ github.event.schedule }}"
-          --stage "${{ github.event.inputs.stage }}"
+          --stage "${{ steps.stage.outputs.stage }}"
           --dry-run "${{ github.event.inputs.dry_run }}"
 
       - name: Save picks database
