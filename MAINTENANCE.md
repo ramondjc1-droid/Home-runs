@@ -12,6 +12,13 @@ refreshing. Newest entries first.
 
 ## Log
 
+### 2026-07-13 — All-Star break crash (first empty slate)
+The empty-slate early return in analyze_slate still returned the pre-ML/TOT
+3-tuple while the caller unpacked 5 values; the first no-games day (All-Star
+Monday) crashed the morning run. Fixed the arity, distinguished "no games"
+(friendly off-day message) from "schedule unreachable" (error flag), and made
+off-days still deliver yesterday's grade report. Regression test added.
+
 ### 2026-07-08 — in-play price leakage + UTC date bug (caught in dry run)
 An evening dry run produced absurd "edges" (+33 pt HR at +16000, +37 pt ML at
 +1150): the UTC runner clock had rolled past midnight (targeting tomorrow's

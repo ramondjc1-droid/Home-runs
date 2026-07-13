@@ -57,8 +57,11 @@ def analyze_slate(verbose: bool = True) -> tuple[list, list, list[str]]:
 
     slate, slate_fresh = fetch_cached("slate", lambda: [
         g.__dict__ for g in mlb.todays_slate()])
+    if slate is None:
+        return [], [], [], [], ["MLB schedule unreachable"]
     if not slate:
-        return [], [], ["MLB schedule unreachable"]
+        # A genuinely empty slate (All-Star break, off-day) — not an error.
+        return [], [], [], [], flags
     if not slate_fresh:
         flags.append("MLB schedule stale — cached slate used")
     games = [mlb.Game(**g) for g in slate]
@@ -493,9 +496,18 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
 
     k_projs, hr_projs, ml_projs, tot_projs, flags = analyze_slate(verbose=verbose)
     if not k_projs and not hr_projs and not ml_projs and not tot_projs:
+        # Off-days still owe the owner yesterday's results.
+        grade = cards.grade_report()
         body = cards.no_slate() if not flags else (
             "⚠️ <b>Morning analysis failed</b> — " + "; ".join(flags))
-        print(body) if dry_run else send_message(body)
+        if dry_run:
+            if grade:
+                print(grade + "\n")
+            print(body)
+        else:
+            if grade:
+                send_message(grade)
+            send_message(body)
         return []
 
     k_picks, hr_picks, ml_picks, tot_picks = select_picks(

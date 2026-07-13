@@ -319,6 +319,21 @@ def test_ml_board_renders():
     assert cards.ml_board([], set()) is None
 
 
+def test_empty_slate_returns_five_tuple():
+    """All-Star break regression: an empty slate must unpack cleanly."""
+    from unittest.mock import patch
+    import morning_analysis as ma
+    with patch.object(ma, "fetch_cached", lambda name, fetch: ([], True)):
+        out = ma.analyze_slate(verbose=False)
+    assert len(out) == 5
+    k, hr, ml, tot, flags = out
+    assert (k, hr, ml, tot, flags) == ([], [], [], [], [])
+    # Unreachable schedule (no cache at all) is still flagged as an error.
+    with patch.object(ma, "fetch_cached", lambda name, fetch: (None, False)):
+        *_, flags2 = ma.analyze_slate(verbose=False)
+    assert flags2 == ["MLB schedule unreachable"]
+
+
 def test_cards_render():
     import cards
     from model import scoring
