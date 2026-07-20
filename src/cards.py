@@ -195,3 +195,48 @@ def grade_report(d: Optional[str] = None) -> Optional[str]:
 def no_slate() -> str:
     return (f"⚾ <b>MLB K PICKS — {today_et().isoformat()}</b>\n\n"
             "No MLB games today — nothing to analyze. See you next slate.")
+
+
+def projections_card(k_list, hr_list, tot_list, d=None) -> str:
+    """Odds-down fallback: model projections only, no book lines / edges.
+
+    Keeps the daily card alive and useful when the Odds API is unavailable.
+    These are informational leans, NOT graded bets (nothing hits the units
+    record until real book lines return).
+    """
+    d = d or today_et().isoformat()
+    parts = [f"⚾ <b>MLB MODEL PROJECTIONS — {d}</b>", "",
+             "⚠️ <b>No book lines today</b> (Odds API down / key needs refresh). "
+             "These are model projections, not edge-vs-market picks — "
+             "informational only, not added to the units record.", "", RULE]
+
+    if k_list:
+        parts += ["", "⚾ <b>TOP PROJECTED STRIKEOUTS</b>", ""]
+        for i, p in enumerate(k_list):
+            n = NUM[i] if i < len(NUM) else f"{i + 1}."
+            parts.append(
+                f"{n} <b>{p.pitcher_name}</b> ({p.team}) vs {p.opponent} — "
+                f"proj <b>{p.projected_ks:.1f} K</b> "
+                f"({p.k_pct_blended:.0%} blended K-rate, {p.confidence}/10)")
+
+    if hr_list:
+        parts += ["", RULE, "", "💣 <b>TOP HR PROBABILITIES</b>", ""]
+        for i, p in enumerate(hr_list):
+            n = NUM[i] if i < len(NUM) else f"{i + 1}."
+            parts.append(
+                f"{n} <b>{p.batter_name}</b> ({p.team}) vs {p.opponent} — "
+                f"model <b>{p.hr_prob:.0%}</b> to homer")
+
+    if tot_list:
+        parts += ["", RULE, "", "🔢 <b>TOTALS LEANS</b>", ""]
+        for i, p in enumerate(tot_list):
+            n = NUM[i] if i < len(NUM) else f"{i + 1}."
+            lean = "OVER" if p.projected_runs >= 8.8 else "UNDER"
+            parts.append(f"{n} <b>{p.matchup}</b> — proj <b>{p.projected_runs:.1f} "
+                         f"runs</b> ({lean} lean)")
+
+    parts += ["", RULE, "",
+              "🔑 Fix book lines: refresh ODDS_API_KEY at the-odds-api.com "
+              "(check key active + monthly quota).",
+              "\n<i>Informational only — not betting advice.</i>"]
+    return "\n".join(parts)

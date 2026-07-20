@@ -334,6 +334,28 @@ def test_empty_slate_returns_five_tuple():
     assert flags2 == ["MLB schedule unreachable"]
 
 
+def test_projections_card_odds_down():
+    import cards
+    from model import scoring
+    k = scoring.project_strikeouts(
+        pitcher_name="Tarik Skubal", pitcher_id=1, team="DET", opponent="CLE",
+        game_pk=1, k_pct_30d=0.34, k_pct_season=0.31, ip_last5_mean=6.4,
+        starts=20, opp_k_pct_l15=0.24, ump_k_factor=1.0, park_k_factor=1.0)
+    k.confidence = 7
+    hr = scoring.project_home_run(
+        batter_name="Aaron Judge", batter_id=2, team="NYY", opponent="TOR",
+        game_pk=2, hr_pa_30d=0.09, hr_pa_season=0.08, park_hr_factor=1.1,
+        pitcher_hr_per_bf=None, temp_f=None)
+    tot = scoring.TotalProjection(home_team="COL", away_team="SD", game_pk=3,
+                                  projected_runs=11.2)
+    card = cards.projections_card([k], [hr], [tot])
+    assert "MODEL PROJECTIONS" in card
+    assert "No book lines" in card
+    assert "Skubal" in card and "Judge" in card and "SD @ COL" in card
+    assert "OVER lean" in card  # 11.2 > 8.8
+    assert "ODDS_API_KEY" in card
+
+
 def test_cards_render():
     import cards
     from model import scoring
