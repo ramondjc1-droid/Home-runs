@@ -77,6 +77,11 @@ def analyze_slate(verbose: bool = True) -> tuple[list, list, list[str]]:
         k_lines = k_lines or {}
         if not lines_fresh and k_lines:
             flags.append("Odds API stale — cached lines used")
+        # Wholesale odds failure (bad/expired key, exhausted quota, outage):
+        # games exist but not a single line came back. Flag it loudly — a
+        # silent empty card must never again look like a normal quiet day.
+        if games and not k_lines:
+            flags.append("ODDS_API_DOWN")
     else:
         flags.append("ODDS_API_KEY not set — projections shown without edges")
 
@@ -495,6 +500,23 @@ def run(dry_run: bool = False, verbose: bool = True) -> list:
             log_error("morning_analysis", f"pre-grade failed: {exc}")
 
     k_projs, hr_projs, ml_projs, tot_projs, flags = analyze_slate(verbose=verbose)
+
+    # Wholesale odds outage: games were on the slate but the Odds API returned
+    # nothing (401 bad/expired key, exhausted quota, or provider outage). This
+    # yields zero picks that would otherwise look like a normal quiet day, so
+    # alert loudly instead of shipping a silent empty card.
+    if "ODDS_API_DOWN" in flags:
+        alert = ("🚨 <b>MLB K Analyst — odds feed DOWN</b>\n\n"
+                 "The Odds API returned no lines for today's slate (usually a "
+                 "401: the ODDS_API_KEY is invalid, rotated, or the monthly "
+                 "quota is exhausted). Projections ran fine, but <b>no picks "
+                 "can be generated without book lines.</b>\n\n"
+                 "Fix: check the-odds-api.com (key active? quota left?) and "
+                 "update the ODDS_API_KEY secret. No picks will publish until "
+                 "the feed is restored.")
+        print(alert) if dry_run else send_message(alert)
+        return []
+
     if not k_projs and not hr_projs and not ml_projs and not tot_projs:
         # Off-days still owe the owner yesterday's results.
         grade = cards.grade_report()

@@ -12,6 +12,18 @@ refreshing. Newest entries first.
 
 ## Log
 
+### 2026-07-20 — Odds API 401 → silent empty cards (root cause of "no picks")
+The ODDS_API_KEY began returning 401 Unauthorized (invalid/rotated key or
+exhausted monthly quota). With no book lines, every projection failed the edge
+gate → 0 picks → the morning card shipped effectively empty. Because a Telegram
+send failure and a zero-pick day both let the job exit 0, this hid as
+"successful delivery." Fix: analyze_slate now emits an ODDS_API_DOWN flag when
+games exist but no lines return, and morning_analysis sends a loud 🚨 Telegram
+alert instead of a silent card. ACTION REQUIRED by owner: refresh ODDS_API_KEY
+(the-odds-api.com dashboard → verify key active + quota) and update the GitHub
+secret / VPS .env. Also a process lesson: verify the [scan] pick count in logs,
+never treat job-success as delivery-success.
+
 ### 2026-07-13 — All-Star break crash (first empty slate)
 The empty-slate early return in analyze_slate still returned the pre-ML/TOT
 3-tuple while the caller unpacked 5 values; the first no-games day (All-Star
